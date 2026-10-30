@@ -20,6 +20,7 @@ chmod 2777 /srv/cut/hotfolder
 
 install -m 644 deploy/sc350cut.service /etc/systemd/system/sc350cut.service
 systemctl daemon-reload
-systemctl enable --now sc350cut
+systemctl enable sc350cut
+systemctl restart sc350cut
 systemctl --no-pager status sc350cut | head -5
 echo "Open http://$(hostname -I | awk '{print $1}'):8350"
