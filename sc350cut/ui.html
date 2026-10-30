@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SC-350 Cut Queue</title>
+<style>
+  :root { --bg:#f5f5f3; --card:#fff; --ink:#1d1d1b; --mute:#6b6b66; --line:#ddddd8;
+          --accent:#e6007e; --ok:#1e7a46; --warn:#a15c00; --err:#b3261e; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.4 system-ui, sans-serif; background:var(--bg); color:var(--ink); }
+  header { display:flex; gap:12px; align-items:center; flex-wrap:wrap; padding:12px 16px;
+           background:var(--card); border-bottom:1px solid var(--line); position:sticky; top:0; z-index:2; }
+  h1 { font-size:18px; margin:0 12px 0 0; }
+  nav button { border:0; background:none; font:inherit; padding:6px 10px; border-radius:6px; cursor:pointer; color:var(--mute); }
+  nav button.on { background:var(--ink); color:#fff; }
+  #scan { flex:1; min-width:200px; padding:8px 10px; border:2px solid var(--accent); border-radius:8px; font:inherit; }
+  main { display:grid; grid-template-columns:minmax(280px, 420px) 1fr; gap:16px; padding:16px; }
+  @media (max-width:800px) { main { grid-template-columns:1fr; } }
+  .list { display:flex; flex-direction:column; gap:8px; }
+  .job { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:10px 12px; cursor:pointer; }
+  .job.sel { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent); }
+  .job .id { font-weight:600; font-family:ui-monospace, monospace; }
+  .job .meta { color:var(--mute); font-size:13px; }
+  .tag { display:inline-block; font-size:12px; padding:1px 6px; border-radius:4px; margin-left:6px; }
+  .tag.err { background:#fbe9e7; color:var(--err); } .tag.warn { background:#fff3e0; color:var(--warn); }
+  .tag.ok { background:#e6f4ea; color:var(--ok); }
+  .detail { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:16px; min-height:300px; }
+  .detail h2 { margin:0 0 4px; font-family:ui-monospace, monospace; }
+  .actions { display:flex; flex-wrap:wrap; gap:8px; margin:12px 0; }
+  .actions button, .actions a { font:inherit; padding:8px 14px; border-radius:6px; border:1px solid var(--line);
+           background:#fff; cursor:pointer; color:var(--ink); text-decoration:none; }
+  .actions .primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+  .preview { background:#e9e9e6; border-radius:6px; padding:12px; text-align:center; }
+  .preview img { max-width:100%; max-height:60vh; box-shadow:0 1px 4px rgba(0,0,0,.2); background:#fff; }
+  dl { display:grid; grid-template-columns:max-content 1fr; gap:4px 12px; margin:12px 0; font-size:14px; }
+  dt { color:var(--mute); }
+  .hist { font-size:13px; color:var(--mute); max-height:160px; overflow:auto; }
+  #drop { border:2px dashed var(--line); border-radius:8px; padding:14px; text-align:center; color:var(--mute); }
+  #drop.over { border-color:var(--accent); color:var(--accent); }
+  #toast { position:fixed; bottom:16px; left:50%; transform:translateX(-50%); background:var(--ink); color:#fff;
+           padding:10px 16px; border-radius:8px; display:none; max-width:90vw; }
+  .empty { color:var(--mute); padding:20px; text-align:center; }
+</style>
+</head>
+<body>
+<header>
+  <h1>SC-350 Cut Queue</h1>
+  <nav><button id="tQueue" class="on">Active queue</button><button id="tArchive">Archive</button></nav>
+  <input id="scan" placeholder="Scan a QR code or search job, file name, customer" autocomplete="off">
+</header>
+<main>
+  <div>
+    <div id="drop">Drop artwork here, or into the hot folder <code id="hf"></code></div>
+    <div class="list" id="list" style="margin-top:10px"></div>
+  </div>
+  <div class="detail" id="detail"><div class="empty">Pick a job to see its print sheet and cut lines.</div></div>
+</main>
+<div id="toast"></div>
+<script>
+let jobs = [], tab = "queued", sel = null, queueHours = 24, filter = "";
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+function toast(t) { const e = $("#toast"); e.textContent = t; e.style.display = "block"; clearTimeout(e._t); e._t = setTimeout(() => e.style.display = "none", 4000); }
+function left(j) {
+  const ms = new Date(j.queued_at).getTime() + queueHours * 3600e3 - Date.now();
+  if (ms <= 0) return "archiving";
+  const h = Math.floor(ms / 3600e3), m = Math.floor(ms % 3600e3 / 60e3);
+  return `${h}h ${m}m left in queue`;
+}
+async function load() {
+  const r = await fetch("api/jobs"); const d = await r.json();
+  jobs = d.jobs; queueHours = d.queue_hours; $("#hf").textContent = d.hotfolder; render();
+}
+function render() {
+  const f = filter.toLowerCase();
+  let list = jobs.filter(j => j.status === tab);
+  if (f) list = jobs.filter(j => [j.id, j.qr, j.name, j.customer].some(v => (v || "").toLowerCase().includes(f)));
+  list.sort((a, b) => (b.queued_at || "").localeCompare(a.queued_at || ""));
+  $("#list").innerHTML = list.length ? list.map(j => `
+    <div class="job ${j.id === sel ? "sel" : ""}" data-id="${esc(j.id)}">
+      <span class="id">${esc(j.id)}</span>
+      ${j.error ? '<span class="tag err">problem</span>' : j.note ? '<span class="tag warn">check</span>' : '<span class="tag ok">ready</span>'}
+      ${j.status === "archived" && f ? '<span class="tag">archived</span>' : ""}
+      <div>${esc(j.name)}${j.customer ? " · " + esc(j.customer) : ""}</div>
+      <div class="meta">${j.status === "queued" ? left(j) : "archived " + esc((j.archived_at || "").slice(0, 10))}
+        · printed ${j.prints || 0} · cut ${j.cuts || 0}${j.revision > 1 ? " · rev " + j.revision : ""}</div>
+    </div>`).join("") : `<div class="empty">${f ? "No match." : tab === "queued" ? "Nothing in the queue." : "Archive is empty."}</div>`;
+  document.querySelectorAll(".job").forEach(e => e.onclick = () => { sel = e.dataset.id; render(); });
+  detail();
+}
+function detail() {
+  const j = jobs.find(x => x.id === sel);
+  if (!j) { $("#detail").innerHTML = '<div class="empty">Pick a job to see its print sheet and cut lines.</div>'; return; }
+  const f = `files/${encodeURIComponent(j.id)}/`;
+  $("#detail").innerHTML = `
+    <h2>${esc(j.id)}</h2><div>${esc(j.name)}</div>
+    ${j.error ? `<p class="tag err" style="display:block;padding:8px">${esc(j.error)}</p>` : ""}
+    ${j.note ? `<p class="tag warn" style="display:block;padding:8px">${esc(j.note)}</p>` : ""}
+    <div class="actions">
+      ${j.printable && !j.error ? `<button data-a="print">Print with marks</button>` : ""}
+      ${!j.error ? `<button class="primary" data-a="cut">Cut now</button>` : ""}
+      ${j.status === "archived" ? `<button class="primary" data-a="requeue">Reuse: back to queue</button>` : `<button data-a="archive">Archive now</button>`}
+      ${j.printable && !j.error ? `<a href="${f}print.pdf" target="_blank">Print PDF</a>` : ""}
+      ${!j.error ? `<a href="${f}cut.plt" download="${esc(j.qr)}.plt">PLT file</a>` : ""}
+      <button data-a="rebuild">Rebuild</button>
+      <button data-a="delete">Delete</button>
+    </div>
+    ${!j.error ? `<div class="preview"><img src="${f}preview.svg?${Date.now()}" alt="Print sheet preview"></div>` : ""}
+    <dl>
+      <dt>QR code</dt><dd>${esc(j.qr)}</dd>
+      <dt>Customer</dt><dd><input id="cust" value="${esc(j.customer)}" placeholder="optional" style="font:inherit;width:100%"></dd>
+      <dt>Artwork</dt><dd>${j.size_mm ? j.size_mm.join(" × ") + " mm" : "-"}</dd>
+      <dt>Cut lines</dt><dd>${j.cut_paths ?? "-"} shapes, ${j.cut_length_mm ? (j.cut_length_mm / 1000).toFixed(2) + " m" : "-"}</dd>
+      <dt>Received</dt><dd>${esc((j.created || "").replace("T", " ").slice(0, 16))}</dd>
+    </dl>
+    <div class="hist">${(j.history || []).slice().reverse().map(h => `${esc(h[0].replace("T", " ").slice(0, 16))} ${esc(h[1])}`).join("<br>")}</div>`;
+  document.querySelectorAll("[data-a]").forEach(b => b.onclick = () => act(j.id, b.dataset.a));
+  $("#cust").onchange = e => act(j.id, "customer", {customer: e.target.value});
+}
+async function act(id, a, body = {}) {
+  if (a === "delete" && !confirm(`Delete ${id} for good?`)) return;
+  const r = await fetch(`api/${encodeURIComponent(id)}/${a}`, {method: "POST", body: JSON.stringify(body)});
+  const d = await r.json(); toast(d.error ? "Problem: " + d.error : `${id}: ${d.message}`);
+  if (a === "requeue") { tab = "queued"; setTab(); }
+  await load();
+}
+function setTab() { $("#tQueue").classList.toggle("on", tab === "queued"); $("#tArchive").classList.toggle("on", tab === "archived"); }
+$("#tQueue").onclick = () => { tab = "queued"; setTab(); render(); };
+$("#tArchive").onclick = () => { tab = "archived"; setTab(); render(); };
+$("#scan").oninput = e => { filter = e.target.value.trim(); render(); };
+$("#scan").onkeydown = async e => {
+  if (e.key !== "Enter") return;
+  const q = e.target.value.trim(); if (!q) return;
+  const d = await (await fetch("api/find?q=" + encodeURIComponent(q))).json();
+  if (d.ids.length === 1) {
+    sel = d.ids[0]; const j = jobs.find(x => x.id === sel);
+    if (j && j.status === "archived") toast(`${sel} is in the archive. Press "Reuse" to put it back in the queue.`);
+    else toast(`Found ${sel}`);
+    e.target.value = ""; filter = ""; tab = j ? j.status : tab; setTab(); render();
+  } else toast(d.ids.length ? `${d.ids.length} matches` : "No job found for " + q);
+};
+const drop = $("#drop");
+drop.ondragover = e => { e.preventDefault(); drop.classList.add("over"); };
+drop.ondragleave = () => drop.classList.remove("over");
+drop.ondrop = async e => {
+  e.preventDefault(); drop.classList.remove("over");
+  for (const file of e.dataTransfer.files) {
+    await fetch("api/upload", {method: "POST", headers: {"X-Filename": encodeURIComponent(file.name)}, body: file});
+    toast(`${file.name} added, it will show up in a few seconds`);
+  }
+  setTimeout(load, 5000);
+};
+load(); setInterval(load, 5000);
+</script>
+</body>
+</html>

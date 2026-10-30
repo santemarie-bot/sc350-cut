@@ -1,0 +1,16 @@
+[Unit]
+Description=SC-350 cut queue (hot folder, cut queue, archive)
+After=network-online.target cups.service
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/python3 -m sc350cut --config /etc/sc350cut.ini serve
+WorkingDirectory=/opt/sc350cut
+Environment=PYTHONPATH=/opt/sc350cut
+User=sc350cut
+Group=sc350cut
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
