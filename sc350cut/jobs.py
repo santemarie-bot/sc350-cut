@@ -230,9 +230,10 @@ class Store:
                 meta["printable"] = False
             else:
                 pdf = marks.artwork_as_pdf(art, folder)
-                ox, oy = marks.build_print_sheet(cfg, jid, pdf, folder / "print.pdf")
+                ox, oy, sw, sh = marks.build_print_sheet(cfg, jid, pdf, folder / "print.pdf")
+                meta["sheet_mm"] = [round(sw, 2), round(sh, 2)]
                 sheet_paths = [[(x + ox, y + oy) for x, y in p] for p in paths]
-                origin = marks.mark_centres(cfg)[0] if cfg.origin == "mark1" else (0.0, 0.0)
+                origin = marks.mark_centres(cfg, sw, sh)[0] if cfg.origin == "mark1" else (0.0, 0.0)
                 meta["printable"] = True
                 meta["offset_mm"] = [round(ox, 2), round(oy, 2)]
             (folder / "cut.json").write_text(json.dumps(sheet_paths))
@@ -253,7 +254,7 @@ class Store:
 
     def preview_svg(self, meta, sheet_paths, print_pdf=None):
         cfg = self.cfg
-        W, H = (cfg.sheet_width_mm, cfg.sheet_height_mm) if meta.get("printable") else (
+        W, H = (meta.get("sheet_mm") or (cfg.sheet_width_mm, cfg.sheet_height_mm)) if meta.get("printable") else (
             max([x for p in sheet_paths for x, _ in p] + [10]), max([y for p in sheet_paths for _, y in p] + [10]))
         parts = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W:.2f} {H:.2f}" '
                  f'width="{W:.2f}mm" height="{H:.2f}mm">',
@@ -263,7 +264,7 @@ class Store:
             parts.append(f'<image href="data:image/png;base64,{png}" width="{W:.2f}" height="{H:.2f}"/>')
         elif meta.get("printable"):
             s = cfg.mark_size_mm
-            for x, y in marks.mark_centres(cfg):
+            for x, y in marks.mark_centres(cfg, W, H):
                 parts.append(f'<rect x="{x - s / 2:.2f}" y="{H - y - s / 2:.2f}" width="{s}" height="{s}" fill="#000"/>')
             q = cfg.qr_size_mm
             qx = cfg.mark_inset_mm + s / 2 + marks.GAP_MM * 2
