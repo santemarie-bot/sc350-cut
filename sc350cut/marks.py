@@ -16,18 +16,35 @@ from reportlab.graphics.shapes import Drawing
 from reportlab.lib.units import mm
 from reportlab.pdfgen import canvas
 
+from . import strip
 from .geometry import ArtworkError
 
 GAP_MM = 3.0
 
 
-def artwork_as_pdf(src: Path, workdir: Path) -> Path:
-    """Return a PDF of the artwork, converting SVG/EPS if needed."""
+def artwork_as_pdf(src: Path, workdir: Path, cut_filter=None):
+    """Return (pdf, removed): a PDF of the artwork for printing, converted
+    from SVG/EPS if needed, with the cut lines taken out when cut_filter is
+    given, and how many cut lines were removed."""
+    pdf = _convert(src, workdir, cut_filter)
+    if cut_filter is None:
+        return pdf, 0
+    out = workdir / "artwork-print.pdf"
+    removed = strip.strip_pdf(pdf, out, cut_filter)
+    return out, removed + getattr(_convert, "svg_removed", 0)
+
+
+def _convert(src: Path, workdir: Path, cut_filter=None) -> Path:
     ext = src.suffix.lower()
+    _convert.svg_removed = 0
     if ext in (".pdf", ".ai"):
         return src
     out = workdir / "artwork-converted.pdf"
     if ext == ".svg":
+        if cut_filter is not None:
+            clean = workdir / "artwork-print.svg"
+            _convert.svg_removed = strip.strip_svg(src, clean, cut_filter)
+            src = clean
         if shutil.which("rsvg-convert"):
             cmd = ["rsvg-convert", "-f", "pdf", "-o", str(out), str(src)]
         elif shutil.which("inkscape"):

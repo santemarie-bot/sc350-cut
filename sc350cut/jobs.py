@@ -229,7 +229,10 @@ class Store:
                 origin = (0.0, 0.0)
                 meta["printable"] = False
             else:
-                pdf = marks.artwork_as_pdf(art, folder)
+                # a file with no named cut line is cut along all its lines;
+                # keep those in the print, there is nothing to hide
+                pdf, hidden = marks.artwork_as_pdf(art, folder, None if note else cf)
+                meta["cut_lines_hidden"] = hidden
                 ox, oy, sw, sh = marks.build_print_sheet(cfg, jid, pdf, folder / "print.pdf")
                 meta["sheet_mm"] = [round(sw, 2), round(sh, 2)]
                 sheet_paths = [[(x + ox, y + oy) for x, y in p] for p in paths]

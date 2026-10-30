@@ -324,6 +324,20 @@ def parse_color(s):
     return None
 
 
+def name_hit(names, text):
+    """True if any name appears in text as whole words: 'cut' matches
+    'Cut layer' and 'CutContour'... but not 'shortcut' or 'cutie'."""
+    words = re.sub(r"([a-z])([A-Z])", r"\1 \2", text or "").lower()
+    words = " " + re.sub(r"[^a-z0-9]+", " ", words) + " "
+    flat = words.replace(" ", "")
+    for n in names:
+        n = n.lower()
+        if " " + re.sub(r"[^a-z0-9]+", " ", n).strip() + " " in words or \
+                (len(n.replace(" ", "")) > 4 and n.replace(" ", "").replace("-", "") in flat):
+            return True
+    return False
+
+
 class CutFilter:
     """Which lines in the artwork are cut lines.
 
@@ -338,8 +352,8 @@ class CutFilter:
         self.tolerance = tolerance
 
     def matches(self, el, st, layers):
-        hay = " ".join([el.get("id") or "", el.get("class") or "", " ".join(layers)]).lower()
-        if any(n in hay for n in self.names):
+        hay = " ".join([el.get("id") or "", el.get("class") or "", " ".join(layers)])
+        if name_hit(self.names, hay):
             return True
         c = parse_color(st.get("stroke"))
         if c and any(max(abs(a - b) for a, b in zip(c, k)) <= self.tolerance for k in self.colors):
