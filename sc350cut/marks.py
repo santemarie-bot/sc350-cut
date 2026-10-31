@@ -129,7 +129,7 @@ def _overlay(cfg, job_id, qr_payload, path: Path, W_mm, H_mm):
 
     q = cfg.qr_size_mm
     qx, qy = qr_position(cfg, W_mm, H_mm)
-    w = QrCodeWidget(qr_payload, barLevel="M")
+    w = QrCodeWidget(qr_payload, barLevel="M", barBorder=0)  # qr_size_mm = the code itself; the sheet around it is the white margin
     x0, y0, x1, y1 = w.getBounds()
     d = Drawing(q * mm, q * mm, transform=[q * mm / (x1 - x0), 0, 0, q * mm / (y1 - y0), 0, 0])
     d.add(w)
