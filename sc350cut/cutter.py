@@ -271,22 +271,26 @@ def talk(text, cfg, wait=2.0):
 
 
 def qr_probe(cfg, only=None, out=print):
-    """Feed the same sheet several ways and ask for the QR code each time,
-    to find the feed the camera needs. Put the sheet back after each eject."""
+    """Feed the same sheet several ways, read its QR code, then try ways of
+    finding the marks on the sheet that is already in. Nothing is cut; the
+    sheet is ejected after each try. Put it back each time."""
     span = mark_span(cfg, cfg_sheet(cfg))
     sx, sy = _span_units(span, cfg)
     o = cfg.mark_origin_units
+    nojob = "IN;CMD:318,-200,-200,600,600,0;"
+    m318 = f"CMD:318,{sx},{sy},600,600,0;"
+    m307 = f"CMD:307,{o},{o},{sx},{sy};"
     our_out = f"PU0,0;!PG;PU;CMD:319,{sx + 800},{sy},0;!PG;;"
-    empty_out = "PU;CMD:319,16600,-200,0;!PG;;"
+    # (name, feed, steps after the QR read: (text to send, reply to wait for))
     tries = [
-        ("SignCut empty-sheet feed", "IN;CMD:318,-200,-200,600,600,0;", empty_out),
-        ("SignCut fallback feed", "IN;CMD:318,0,0,500,500,0;", empty_out),
-        ("mark feed + CMD:307", f"IN;CMD:318,{sx},{sy},600,600,0;CMD:307,{o},{o},{sx},{sy};", our_out),
-        ("mark feed, read twice", f"IN;CMD:318,{sx},{sy},600,600,0;", our_out),
+        ("no-job feed, read QR, then CMD:318 marks, then CMD:307", nojob, [(m318, "CMD:318,"), (m307, "CMD:307,")]),
+        ("no-job feed, read QR, then CMD:318+CMD:307 together (as SignCut's job file)", nojob, [(m318 + m307, "CMD:307,")]),
+        ("no-job feed, read QR, then IN;CMD:318 marks (whole job header)", nojob, [("IN;" + m318, "CMD:318,"), (m307, "CMD:307,")]),
+        ("mark feed + CMD:307, then read QR", "IN;" + m318 + m307, []),
     ]
     with Link(cfg, timeout=10) as link:
         link.trace = lambda d, t: out(f"   cutter {d} {t.strip()}")
-        for n, (name, feed, eject) in enumerate(tries, 1):
+        for n, (name, feed, steps) in enumerate(tries, 1):
             if only and n != only:
                 continue
             out(f"\n== try {n}: {name}. Put the sheet in the feeder (QR edge first) ...")
@@ -297,13 +301,17 @@ def qr_probe(cfg, only=None, out=print):
                 time.sleep(2)
             link.send(feed)
             fed = link.expect("CMD:318,", 60)
-            for _ in range(2 if n == 4 else 1):
-                link.send("CMD:305,1;CMD:304;CMD:305,0;")
-                qr = link.expect("CMD:304,", 30, give_up=("NOQRCODE",))
-                out(f"== try {n}: feed reply {fed!r}, QR = {qr if qr else 'NOQRCODE'}")
-                time.sleep(1)
-            link.read(1)
-            link.send(eject)
+            if "CMD:307" in feed:
+                fed = f"{fed}, CMD:307 {link.expect('CMD:307,', 60)}"
+            link.send("CMD:305,1;CMD:304;CMD:305,0;")
+            qr = link.expect("CMD:304,", 30, give_up=("NOQRCODE",))
+            res = [f"feed {fed}", f"QR {qr or 'NOQRCODE'}"]
+            for text, reply in steps:
+                link.send(text)
+                res.append(f"{reply}{link.expect(reply, 60)}")
+            out(f"== try {n} RESULT: " + " | ".join(res))
+            link.read(2)
+            link.send(our_out)
             link.expect("CMD:319,", 60)
             for _ in range(60):
                 link.send("CMD:100;")
