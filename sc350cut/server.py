@@ -37,7 +37,10 @@ def print_job(store, meta):
     cfg = store.cfg
     if not meta.get("printable"):
         raise RuntimeError("this job has no print sheet")
-    cmd = ["lp"] + (["-d", cfg.printer] if cfg.printer else []) + \
+    opts = []
+    for o in cfg.print_options.split():
+        opts += ["-o", o]
+    cmd = ["lp"] + (["-d", cfg.printer] if cfg.printer else []) + opts + \
         ["-t", meta["id"], str(Path(meta["folder"]) / "print.pdf")]
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     if r.returncode:
