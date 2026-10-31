@@ -107,6 +107,7 @@ class QRMode:
                 with cutter.Link(cfg) as link:
                     link.trace = self._trace
                     self.say("connected, checking the feed tray")
+                    cam = None
                     while self.on:
                         if self.paused:
                             self.status = f"paused ({self.done} cut, {self.ejected} ejected)"
@@ -125,59 +126,65 @@ class QRMode:
                             time.sleep(2)
                             continue
                         empty_since = None
-                        # feed the sheet in without a job, as SignCut's spooler does;
-                        # this leaves the camera over the QR code (a feed that finds
-                        # the marks first leaves it elsewhere: NOQRCODE). The job file
-                        # sent after the read starts with its own CMD:318, which finds
-                        # the marks on the sheet that is already in.
-                        eject = "PU;" + cfg.qr_eject + "!PG;;"
-                        self.say("feeding the sheet in")
-                        link.send(f"IN;CMD:318,{cfg.qr_feed};")
+                        # Tested on the SC-350 with qrprobe (2026-10-31): find the 4 marks
+                        # first (CMD:318 + CMD:307), then move the camera over the QR code
+                        # (its centre plus the camera offset from CMD:122) and read it. The
+                        # mark search loads a sheet, so it can't come after the QR read.
+                        span = cutter.mark_span(cfg, cutter.cfg_sheet(cfg))
+                        sx, sy = cutter._span_units(span, cfg)
+                        o = cfg.mark_origin_units
+                        eject = f"PU0,0;!PG;PU;CMD:319,{sx + 800},{sy},0;!PG;;"
+                        self.say("feeding the sheet in and finding the marks")
+                        link.send(f"IN;CMD:318,{sx},{sy},{cfg.feed_params};CMD:307,{o},{o},{sx},{sy};")
                         fed = link.expect("CMD:318,", cfg.qr_timeout)
-                        if fed is None or not fed.strip().upper().startswith("OK"):
+                        found = link.expect("CMD:307,", cfg.qr_timeout) if fed and fed.strip().upper().startswith("OK") else None
+                        if found is None or not found.strip().upper().startswith("OK"):
                             self.ejected += 1
-                            self.say(f"the cutter could not feed the sheet ({fed or 'no answer'}), ejecting it")
+                            self.say(f"the cutter could not feed the sheet or find its marks "
+                                     f"(feed {fed or 'no answer'}, marks {found or 'no answer'}), ejecting it")
                             link.send(eject)
-                            link.expect("CMD:319,", 60)
+                            link.expect("CMD:319,", 120)
                             self._wait_idle(link)
                             continue
+                        if cam is None:
+                            link.send("CMD:122;")
+                            r = link.expect("CMD:122,", 10) or ""
+                            try:
+                                cam = tuple(int(float(v)) for v in r.split(",")[:2])
+                            except ValueError:
+                                cam = (0, 0)
+                            self.say(f"camera offset {cam}")
+                        qx, qy = o + cam[0], o + round(sy / 2) + cam[1]
                         self.say("reading the QR code")
+                        link.send(f"PU{qx},{qy};")
+                        link.read(3)    # let the head get there (qrprobe waited 3 s too)
                         link.send("CMD:305,1;CMD:304;CMD:305,0;")
                         qr = link.expect("CMD:304,", cfg.qr_timeout, give_up=("NOQRCODE",))
                         hits = self.store.find(qr) if qr else []
                         meta = next((m for m in hits if m.get("status") == "queued"), hits[0] if hits else None)
-                        if not meta or not (Path(meta["folder"]) / "cut.plt").exists():
+                        plt = Path(meta["folder"]) / "cut.plt" if meta else None
+                        if not meta or not plt.exists():
                             self.ejected += 1
                             self.say(f"no job for QR '{qr}', ejecting the sheet" if qr else "no QR code found, ejecting the sheet")
                             link.send(eject)
-                            link.expect("CMD:319,", 60)
+                            link.expect("CMD:319,", 120)
                             self._wait_idle(link)
                             continue
-                        # the sheet is already in. Send the job's CMD:318 (mark spacing)
-                        # and CMD:307 without its IN; (IN; resets the cutter and the marks
-                        # answer NG; CMD:307 alone also answers NG). Tested with qrprobe
-                        # 2026-10-31: CMD:318+CMD:307 after the QR read -> CMD:307,OK.
-                        # Only send the cut lines once the cutter says the marks are OK.
-                        body = (Path(meta["folder"]) / "cut.plt").read_text().strip().lstrip("$").rstrip("#")
-                        parts = [c for c in body.split(";")]
-                        while parts and parts[0].strip() == "IN":
-                            parts.pop(0)
+                        # the job's own IN / CMD:318 / CMD:307 are done already
+                        parts = plt.read_text().strip().lstrip("$").rstrip("#").split(";")
                         head = []
-                        while parts and parts[0].strip().startswith(("CMD:318", "CMD:307")):
-                            head.append(parts.pop(0))
-                        reg = ";".join(head)
+                        while parts and (parts[0].strip() == "IN" or parts[0].strip().startswith(("CMD:318", "CMD:307"))):
+                            head.append(parts.pop(0).strip())
+                        want = f"CMD:318,{sx},{sy},"
+                        if any(h.startswith("CMD:318") and not h.startswith(want) for h in head):
+                            self.ejected += 1
+                            self.say(f"{meta['id']} was made for another sheet size than {cfg.sheet_width_mm:g} x "
+                                     f"{cfg.sheet_height_mm:g} mm, ejecting the sheet")
+                            link.send(eject)
+                            link.expect("CMD:319,", 120)
+                            self._wait_idle(link)
+                            continue
                         cuts = ";".join(parts)
-                        self.say(f"QR {qr} = {meta['id']} ({meta['name']}); finding the marks")
-                        if reg:
-                            link.send(reg + ";")
-                            found = link.expect("CMD:307,", cfg.qr_timeout)
-                            if found is None or not found.strip().upper().startswith("OK"):
-                                self.ejected += 1
-                                self.say(f"the cutter could not find the marks ({found or 'no answer'}), ejecting the sheet")
-                                link.send(eject)
-                                link.expect("CMD:319,", 60)
-                                self._wait_idle(link)
-                                continue
                         self.say(f"cutting {meta['id']} ({meta['name']})")
                         link.send(cuts)
                         result = link.expect("CMD:319,", cfg.cut_timeout)
