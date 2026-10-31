@@ -281,16 +281,21 @@ def qr_probe(cfg, only=None, out=print):
     m318 = f"CMD:318,{sx},{sy},600,600,0;"
     m307 = f"CMD:307,{o},{o},{sx},{sy};"
     our_out = f"PU0,0;!PG;PU;CMD:319,{sx + 800},{sy},0;!PG;;"
-    # (name, feed, steps after the QR read: (text to send, reply to wait for))
+    # QR centre in cutter units (mark 1 = 100,100): on the leading marks' line,
+    # halfway across to the other leading mark
+    qx, qy = o, o + round(sy / 2)
+    # (name, feed, steps before the QR read, steps after it: (text, reply to wait for))
     tries = [
-        ("no-job feed, read QR, then CMD:318 marks, then CMD:307", nojob, [(m318, "CMD:318,"), (m307, "CMD:307,")]),
-        ("no-job feed, read QR, then CMD:318+CMD:307 together (as SignCut's job file)", nojob, [(m318 + m307, "CMD:307,")]),
-        ("no-job feed, read QR, then IN;CMD:318 marks (whole job header)", nojob, [("IN;" + m318, "CMD:318,"), (m307, "CMD:307,")]),
-        ("mark feed + CMD:307, then read QR", "IN;" + m318 + m307, []),
+        ("mark feed + CMD:307, ask camera offset, move to the QR, read",
+         "IN;" + m318 + m307, [("CMD:122;", "CMD:122,"), (f"PU{qx},{qy};", None)], []),
+        ("mark feed + CMD:307, move to the QR with the camera offset, read",
+         "IN;" + m318 + m307, [("CMD:122;", "CMD:122,"), ("@offset", None)], []),
+        ("no-job feed, read QR, then IN;CMD:318+CMD:307 (SignCut's job header)",
+         nojob, [], [("IN;" + m318 + m307, "CMD:307,")]),
     ]
     with Link(cfg, timeout=10) as link:
         link.trace = lambda d, t: out(f"   cutter {d} {t.strip()}")
-        for n, (name, feed, steps) in enumerate(tries, 1):
+        for n, (name, feed, before, after) in enumerate(tries, 1):
             if only and n != only:
                 continue
             out(f"\n== try {n}: {name}. Put the sheet in the feeder (QR edge first) ...")
@@ -299,20 +304,40 @@ def qr_probe(cfg, only=None, out=print):
                 if (link.expect("CMD:320,", 5) or "").strip() == "4":
                     break
                 time.sleep(2)
+            t0 = time.time()
             link.send(feed)
-            fed = link.expect("CMD:318,", 60)
+            res = [f"feed CMD:318,{link.expect('CMD:318,', 120)}"]
             if "CMD:307" in feed:
-                fed = f"{fed}, CMD:307 {link.expect('CMD:307,', 60)}"
+                res.append(f"CMD:307,{link.expect('CMD:307,', 120)}")
+            offset = None
+            for text, reply in before:
+                if text == "@offset":
+                    try:
+                        ox, oy = (int(float(v)) for v in (offset or "").split(",")[:2])
+                    except ValueError:
+                        res.append(f"no usable camera offset ({offset!r})")
+                        continue
+                    text = f"PU{qx + ox},{qy + oy};"
+                link.send(text)
+                if reply:
+                    r = link.expect(reply, 20)
+                    res.append(f"{reply}{r}")
+                    if reply == "CMD:122,":
+                        offset = r
+                else:
+                    res.append(f"sent {text}")
+                    link.read(3)
             link.send("CMD:305,1;CMD:304;CMD:305,0;")
             qr = link.expect("CMD:304,", 30, give_up=("NOQRCODE",))
-            res = [f"feed {fed}", f"QR {qr or 'NOQRCODE'}"]
-            for text, reply in steps:
+            res.append(f"QR {qr or 'NOQRCODE'}")
+            for text, reply in after:
                 link.send(text)
-                res.append(f"{reply}{link.expect(reply, 60)}")
+                res.append(f"{reply}{link.expect(reply, 120)}")
+            res.append(f"{time.time() - t0:.0f} s")
             out(f"== try {n} RESULT: " + " | ".join(res))
             link.read(2)
             link.send(our_out)
-            link.expect("CMD:319,", 60)
+            link.expect("CMD:319,", 120)
             for _ in range(60):
                 link.send("CMD:100;")
                 if (link.expect("CMD:100,", 5) or "").upper().startswith("OK"):
