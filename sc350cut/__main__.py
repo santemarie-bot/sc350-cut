@@ -19,6 +19,8 @@ def main():
     p = sub.add_parser("talk", help="send cutter commands and show the reply, e.g. talk 'CMD:100;'")
     p.add_argument("text")
     p.add_argument("--port", type=int, help="try another TCP port, e.g. 9200")
+    p = sub.add_parser("qrprobe", help="try ways of feeding a sheet and reading its QR code (QR mode must be off)")
+    p.add_argument("--only", type=int, help="run just this try number")
     sub.add_parser("archive-due", help="archive jobs older than the queue time")
     a = ap.parse_args()
     cfg = config.load(a.config)
@@ -34,6 +36,8 @@ def main():
             cfg.cutter_device = f"tcp://{host}:{a.port}"
         reply = cutter.talk(a.text, cfg, wait=3)
         print(reply if reply else "(no reply within 3 s)")
+    elif a.cmd == "qrprobe":
+        cutter.qr_probe(cfg, only=a.only)
     elif a.cmd == "archive-due":
         Store(cfg).archive_due()
     return 0

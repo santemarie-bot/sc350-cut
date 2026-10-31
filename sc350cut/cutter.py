@@ -267,6 +267,49 @@ def talk(text, cfg, wait=2.0):
         return link.read(wait)
 
 
+def qr_probe(cfg, only=None, out=print):
+    """Feed the same sheet several ways and ask for the QR code each time,
+    to find the feed the camera needs. Put the sheet back after each eject."""
+    span = mark_span(cfg, cfg_sheet(cfg))
+    sx, sy = _span_units(span, cfg)
+    o = cfg.mark_origin_units
+    our_out = f"PU0,0;!PG;PU;CMD:319,{sx + 800},{sy},0;!PG;;"
+    empty_out = "PU;CMD:319,16600,-200,0;!PG;;"
+    tries = [
+        ("SignCut empty-sheet feed", "IN;CMD:318,-200,-200,600,600,0;", empty_out),
+        ("SignCut fallback feed", "IN;CMD:318,0,0,500,500,0;", empty_out),
+        ("mark feed + CMD:307", f"IN;CMD:318,{sx},{sy},600,600,0;CMD:307,{o},{o},{sx},{sy};", our_out),
+        ("mark feed, read twice", f"IN;CMD:318,{sx},{sy},600,600,0;", our_out),
+    ]
+    with Link(cfg, timeout=10) as link:
+        link.trace = lambda d, t: out(f"   cutter {d} {t.strip()}")
+        for n, (name, feed, eject) in enumerate(tries, 1):
+            if only and n != only:
+                continue
+            out(f"\n== try {n}: {name}. Put the sheet in the feeder (QR edge first) ...")
+            while True:
+                link.send("CMD:320;")
+                if (link.expect("CMD:320,", 5) or "").strip() == "4":
+                    break
+                time.sleep(2)
+            link.send(feed)
+            fed = link.expect("CMD:318,", 60)
+            for _ in range(2 if n == 4 else 1):
+                link.send("CMD:305,1;CMD:304;CMD:305,0;")
+                qr = link.expect("CMD:304,", 30, give_up=("NOQRCODE",))
+                out(f"== try {n}: feed reply {fed!r}, QR = {qr if qr else 'NOQRCODE'}")
+                time.sleep(1)
+            link.read(1)
+            link.send(eject)
+            link.expect("CMD:319,", 60)
+            for _ in range(60):
+                link.send("CMD:100;")
+                if (link.expect("CMD:100,", 5) or "").upper().startswith("OK"):
+                    break
+                time.sleep(1)
+    out("\ndone")
+
+
 def send(data: str, cfg):
     dev = cfg.cutter_device
     data = data.strip().lstrip("$").rstrip("#")
