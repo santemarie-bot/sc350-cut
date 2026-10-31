@@ -13,7 +13,7 @@
            background:var(--card); border-bottom:1px solid var(--line); position:sticky; top:0; z-index:2; }
   h1 { font-size:18px; margin:0 12px 0 0; }
   nav button { border:0; background:none; font:inherit; padding:6px 10px; border-radius:6px; cursor:pointer; color:var(--mute); }
-  nav button.on { background:var(--ink); color:#fff; }
+  nav button.on, #qr.on { background:var(--ink); color:#fff; }
   #scan { flex:1; min-width:200px; padding:8px 10px; border:2px solid var(--accent); border-radius:8px; font:inherit; }
   main { display:grid; grid-template-columns:minmax(280px, 420px) 1fr; gap:16px; padding:16px; }
   @media (max-width:800px) { main { grid-template-columns:1fr; } }
@@ -47,6 +47,8 @@
 <header>
   <h1>SC-350 Cut Queue</h1>
   <nav><button id="tQueue" class="on">Active queue</button><button id="tArchive">Archive</button></nav>
+  <button id="qr" title="Cutter feeds each sheet, reads its QR code and cuts the matching job">QR mode: off</button>
+  <span id="qrs" style="color:var(--mute);font-size:13px"></span>
   <input id="scan" placeholder="Scan a QR code or search job, file name, customer" autocomplete="off">
 </header>
 <main>
@@ -58,7 +60,7 @@
 </main>
 <div id="toast"></div>
 <script>
-let jobs = [], tab = "queued", sel = null, queueHours = 24, filter = "";
+let qrOn = false, jobs = [], tab = "queued", sel = null, queueHours = 24, filter = "";
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 function toast(t) { const e = $("#toast"); e.textContent = t; e.style.display = "block"; clearTimeout(e._t); e._t = setTimeout(() => e.style.display = "none", 4000); }
@@ -70,7 +72,9 @@ function left(j) {
 }
 async function load() {
   const r = await fetch("api/jobs"); const d = await r.json();
-  jobs = d.jobs; queueHours = d.queue_hours; $("#hf").textContent = d.hotfolder; render();
+  jobs = d.jobs; queueHours = d.queue_hours; $("#hf").textContent = d.hotfolder;
+  qrOn = d.qr_mode.on; $("#qr").textContent = "QR mode: " + (qrOn ? "on" : "off"); $("#qr").classList.toggle("on", qrOn);
+  $("#qrs").textContent = qrOn || d.qr_mode.status !== "off" ? d.qr_mode.status : ""; render();
 }
 function render() {
   const f = filter.toLowerCase();
@@ -125,6 +129,10 @@ async function act(id, a, body = {}) {
   if (a === "requeue") { tab = "queued"; setTab(); }
   await load();
 }
+$("#qr").onclick = async () => {
+  const d = await (await fetch("api/qrmode", {method: "POST", body: JSON.stringify({on: !qrOn})})).json();
+  toast(d.error || d.message); await load();
+};
 function setTab() { $("#tQueue").classList.toggle("on", tab === "queued"); $("#tArchive").classList.toggle("on", tab === "archived"); }
 $("#tQueue").onclick = () => { tab = "queued"; setTab(); render(); };
 $("#tArchive").onclick = () => { tab = "archived"; setTab(); render(); };

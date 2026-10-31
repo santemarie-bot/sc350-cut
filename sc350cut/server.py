@@ -53,7 +53,77 @@ def cut_job(store, meta):
     return msg
 
 
-def make_handler(store: Store):
+class QRMode:
+    """Cutter-driven loop, like SignCut's spooler in QR mode: wait for a
+    sheet, feed it in, let the camera read the QR code, send that job's cut
+    lines, feed the sheet out, repeat until stopped."""
+
+    def __init__(self, store):
+        self.store, self.on, self.status, self.thread = store, False, "off", None
+        self.done = 0
+
+    def set(self, on):
+        if on and not self.on:
+            self.on = True
+            self.thread = threading.Thread(target=self.run, daemon=True)
+            self.thread.start()
+        elif not on:
+            self.on = False
+            self.status = "stopping"
+
+    def say(self, msg):
+        self.status = msg
+        log(f"QR mode: {msg}")
+
+    def run(self):
+        cfg = self.store.cfg
+        sheet = cutter.cfg_sheet(cfg)
+        while self.on:
+            try:
+                with cutter.Link(cfg) as link:
+                    self.say("connected, waiting for a sheet")
+                    while self.on:
+                        link.send("CMD:320;")
+                        loaded = link.expect("CMD:320,", 5)
+                        if loaded is None:
+                            self.say("cutter does not answer CMD:320 (material check) on this port")
+                            time.sleep(5)
+                            continue
+                        if loaded.strip() != "4":
+                            self.status = "waiting for a sheet"
+                            time.sleep(2)
+                            continue
+                        self.say("feeding the sheet and reading the QR code")
+                        link.send("IN;" + cutter.feed_in(cfg, sheet))
+                        link.send("CMD:305,1;CMD:304;CMD:305,0;")
+                        qr = link.expect("CMD:304,", cfg.qr_timeout)
+                        tail = "PU0,0;!PG;PU;" + cutter.feed_out(cfg, sheet) + "!PG;;"
+                        hits = self.store.find(qr) if qr else []
+                        meta = next((m for m in hits if m.get("status") == "queued"), hits[0] if hits else None)
+                        if not meta or not (Path(meta["folder"]) / "cut.plt").exists():
+                            self.say(f"no job for QR '{qr}', sheet fed out" if qr else "no QR code read, sheet fed out")
+                            link.send(tail)
+                            time.sleep(3)
+                            continue
+                        body = cutter.strip_frame((Path(meta["folder"]) / "cut.plt").read_text())
+                        self.say(f"cutting {meta['id']}")
+                        link.send(body + tail)
+                        result = link.expect("CMD:307,", 600)
+                        self.done += 1
+                        self.store.note(meta["id"], f"cut in QR mode ({result or 'no result reply'})",
+                                        cuts=meta.get("cuts", 0) + 1)
+                        self.say(f"{meta['id']} cut: {result or 'no result reply'}; waiting for the next sheet")
+                        time.sleep(1)
+            except Exception as e:
+                self.say(f"problem: {e}; retrying in 10 s")
+                for _ in range(10):
+                    if not self.on:
+                        break
+                    time.sleep(1)
+        self.status = "off"
+
+
+def make_handler(store: Store, qr: "QRMode"):
     class H(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):
             pass
@@ -81,7 +151,8 @@ def make_handler(store: Store):
                     j.pop("folder", None)
                     j["qr"] = store.qr_text(j["id"])
                 return self._send(200, {"jobs": jobs, "queue_hours": store.cfg.queue_hours,
-                                        "hotfolder": str(store.cfg.hotfolder)})
+                                        "hotfolder": str(store.cfg.hotfolder),
+                                        "qr_mode": {"on": qr.on, "status": qr.status, "done": qr.done}})
             if parts == ["api", "find"]:
                 q = parse_qs(u.query).get("q", [""])[0]
                 return self._send(200, {"ids": [m["id"] for m in store.find(q)]})
@@ -115,6 +186,9 @@ def make_handler(store: Store):
                     tmp.replace(store.cfg.hotfolder / name)
                     return self._send(200, {"ok": True})
                 body = json.loads(self.rfile.read(length) or b"{}")
+                if parts == ["api", "qrmode"]:
+                    qr.set(bool(body.get("on")))
+                    return self._send(200, {"ok": True, "message": "QR mode " + ("on" if qr.on else "off")})
                 if len(parts) != 3 or parts[0] != "api":
                     return self._send(404, {"error": "not found"})
                 jid, action = parts[1], parts[2]
@@ -149,6 +223,6 @@ def make_handler(store: Store):
 def run(cfg):
     store = Store(cfg, log=log)
     threading.Thread(target=worker, args=(store,), daemon=True).start()
-    srv = ThreadingHTTPServer((cfg.listen, cfg.port), make_handler(store))
+    srv = ThreadingHTTPServer((cfg.listen, cfg.port), make_handler(store, QRMode(store)))
     log(f"SC-350 cut queue on http://{cfg.listen}:{cfg.port}  hot folder {cfg.hotfolder}")
     srv.serve_forever()

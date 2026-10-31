@@ -38,11 +38,15 @@ class Config:
 
     # cutter
     cutter_device: str = "tcp://192.168.0.52:9100"   # or /dev/usb/lp0, /dev/ttyUSB0, cups:QueueName
-    cutter_baud: int = 9600
+    cutter_baud: int = 38400
+    protocol: str = "signcut"          # signcut = CMD:318/319 feed framing; plain = preamble/postamble only
+    feed_params: str = "200,200,1"     # last three CMD:318 values, as SignCut writes them
+    qr_timeout: float = 60.0           # QR mode: seconds to wait for the cutter to read a QR code
     units_per_mm: float = 40.0
     speed: int = 0                     # VS value, 0 = leave cutter default
     force: int = 0                     # FS value, 0 = leave cutter default
-    origin: str = "mark1"              # cut origin: mark1 (bottom-left mark) or sheet
+    origin: str = "mark1"              # cut 0,0: mark1 = outer corner of the bottom-left mark (as SignCut), mark1centre, or sheet
+    rotate_portrait: bool = True       # turn portrait sheets so the long side runs along the feed
     preamble: str = "IN;"
     postamble: str = "PU0,0;SP0;"
     mirror: bool = False

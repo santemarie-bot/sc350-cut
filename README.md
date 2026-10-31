@@ -21,14 +21,27 @@ sudo ./deploy/install.sh
 
 Settings: `/etc/sc350cut.ini` (copied from `deploy/sc350cut.ini`). Set `printer =` to the Xerox CUPS queue name (`lpstat -p`). Restart with `sudo systemctl restart sc350cut`. Logs: `journalctl -u sc350cut -f`.
 
+## Cutter commands
+
+Every cut file is wrapped the way SignCut writes it for the Vulcan (see `notes/signcut-protocol.md` in the project files):
+`IN;CMD:318,<length>,<width>,200,200,1;` feeds the sheet in and finds the marks, then the cut lines (0.025 mm units,
+measured from the outer corner of the bottom-left mark), then `CMD:319,...` feeds the sheet out.
+Portrait sheets are turned so the long side runs along the feed.
+
+**QR mode** (button at the top of the page): the server keeps a connection to the cutter, waits for a sheet
+(`CMD:320`), feeds it in, asks the camera for the QR code (`CMD:304`), sends the matching job's cut lines,
+and feeds the sheet out. Load sheets one after another; each is cut by its own QR code.
+
 ## Still to confirm on the real machine
 
-- The SC-350's network port and the exact commands SignCut sends for camera marks and QR mode. Run `sudo ./deploy/capture-signcut.sh`, cut one job from SignCut, and the capture shows them. They then go into `preamble`/`postamble` (or code) so cuts register on the marks.
-- Units per mm (40 is the HP-GL standard) and whether the cutter wants mark 1 as origin.
+- Which TCP port the cutter answers on (9100 or 9200). Test with
+  `python3 -m sc350cut --config /etc/sc350cut.ini talk 'CMD:100;'` and add `--port 9200` to try the other one.
+- Whether the camera finds our square marks and QR code where we print them, or needs SignCut's layout.
 
 ## Command line
 
 ```
 python3 -m sc350cut --config /etc/sc350cut.ini ingest file.pdf   # add a file now
 python3 -m sc350cut --config /etc/sc350cut.ini send job.plt      # send a PLT to the cutter
+python3 -m sc350cut --config /etc/sc350cut.ini talk 'CMD:100;'   # send a command, show the cutter's reply
 ```

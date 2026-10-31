@@ -225,6 +225,7 @@ class Store:
             if not paths:
                 raise geometry.ArtworkError("no cut lines found in the artwork")
             sheet_paths = paths
+            sheet = None
             if art.suffix.lower() in (".plt", ".hpgl", ".hpg"):
                 origin = (0.0, 0.0)
                 meta["printable"] = False
@@ -235,12 +236,18 @@ class Store:
                 meta["cut_lines_hidden"] = hidden
                 ox, oy, sw, sh = marks.build_print_sheet(cfg, jid, pdf, folder / "print.pdf")
                 meta["sheet_mm"] = [round(sw, 2), round(sh, 2)]
+                sheet = (sw, sh)
                 sheet_paths = [[(x + ox, y + oy) for x, y in p] for p in paths]
-                origin = marks.mark_centres(cfg, sw, sh)[0] if cfg.origin == "mark1" else (0.0, 0.0)
+                origin = marks.cut_origin(cfg, sw, sh)
                 meta["printable"] = True
                 meta["offset_mm"] = [round(ox, 2), round(oy, 2)]
             (folder / "cut.json").write_text(json.dumps(sheet_paths))
-            plt = cutter.to_hpgl(cutter.transform(sheet_paths, cfg, origin), cfg)
+            cut_paths, cut_origin, cut_sheet = sheet_paths, origin, sheet
+            if sheet and sheet[0] < sheet[1] and cfg.rotate_portrait:
+                # the cutter's X axis runs along the feed (long side, max 500 mm)
+                # and Y across it (max 350 mm), so a portrait sheet goes in turned
+                cut_paths, cut_origin, cut_sheet = cutter.rotate(sheet_paths, origin, sheet)
+            plt = cutter.to_hpgl(cutter.transform(cut_paths, cfg, cut_origin), cfg, cut_sheet)
             (folder / "cut.plt").write_text(plt)
             cutter.export(plt, cfg.plt_export, self.qr_text(jid))
             (folder / "preview.svg").write_text(self.preview_svg(meta, sheet_paths, folder / "print.pdf"))

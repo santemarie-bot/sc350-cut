@@ -71,6 +71,17 @@ def mark_centres(cfg, W=None, H=None):
     return marks
 
 
+def cut_origin(cfg, W=None, H=None):
+    """Where cut coordinate 0,0 is on the sheet. SignCut measures from the
+    outer corner of the bottom-left registration mark (TEST01.plt)."""
+    x, y = mark_centres(cfg, W, H)[0]
+    if cfg.origin == "mark1":
+        return x - cfg.mark_size_mm / 2, y - cfg.mark_size_mm / 2
+    if cfg.origin == "mark1centre":
+        return x, y
+    return 0.0, 0.0
+
+
 def print_area(cfg, W=None, H=None):
     """Rectangle (x0, y0, x1, y1) in mm where artwork may go."""
     i, s = cfg.mark_inset_mm, cfg.mark_size_mm
