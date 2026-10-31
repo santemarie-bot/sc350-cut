@@ -125,6 +125,20 @@ class QRMode:
                             time.sleep(2)
                             continue
                         empty_since = None
+                        # feed the sheet in and find the marks first, as SignCut's
+                        # spooler does; only then can the camera see the QR code
+                        span = cutter.mark_span(cfg, cutter.cfg_sheet(cfg))
+                        eject = "PU0,0;!PG;PU;" + cutter.feed_out(cfg, span) + "!PG;;"
+                        self.say("feeding the sheet in and finding the marks")
+                        link.send("IN;" + cutter.feed_in(cfg, span, registration=False))
+                        fed = link.expect("CMD:318,", cfg.qr_timeout)
+                        if fed is None or not fed.strip().upper().startswith("OK"):
+                            self.ejected += 1
+                            self.say(f"the cutter could not feed the sheet or find its marks ({fed or 'no answer'}), ejecting it")
+                            link.send(eject)
+                            link.expect("CMD:319,", 60)
+                            self._wait_idle(link)
+                            continue
                         self.say("reading the QR code")
                         link.send("CMD:305,1;CMD:304;CMD:305,0;")
                         qr = link.expect("CMD:304,", cfg.qr_timeout, give_up=("NOQRCODE",))
@@ -133,18 +147,19 @@ class QRMode:
                         if not meta or not (Path(meta["folder"]) / "cut.plt").exists():
                             self.ejected += 1
                             self.say(f"no job for QR '{qr}', ejecting the sheet" if qr else "no QR code found, ejecting the sheet")
-                            link.send(cutter.EMPTY_JOB)
+                            link.send(eject)
+                            link.expect("CMD:319,", 60)
                             self._wait_idle(link)
                             continue
-                        job = (Path(meta["folder"]) / "cut.plt").read_text().strip().lstrip("$").rstrip("#")
+                        job = cutter.after_feed((Path(meta["folder"]) / "cut.plt").read_text())
                         self.say(f"cutting {meta['id']} ({meta['name']})")
                         link.send(job)
-                        result = link.expect("CMD:307,", cfg.cut_timeout)
+                        result = link.expect("CMD:319,", cfg.cut_timeout)
                         self._wait_idle(link)
                         self.done += 1
-                        self.store.note(meta["id"], f"cut in QR mode ({result or 'no result reply'})",
+                        self.store.note(meta["id"], f"cut in QR mode ({'finished' if result else 'no finish reply'})",
                                         cuts=meta.get("cuts", 0) + 1, cut_at=now_iso())
-                        self.say(f"{meta['id']} cut ({result or 'no result reply'}); {self.done} cut so far, next sheet")
+                        self.say(f"{meta['id']} cut; {self.done} cut so far, next sheet")
                     self.say(f"stopped: {self.done} cut, {self.ejected} ejected")
             except Exception as e:
                 self.say(f"problem: {e}; retrying in 10 s")

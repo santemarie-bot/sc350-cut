@@ -81,13 +81,14 @@ def _span_units(span, cfg):
     return tuple(round(v * cfg.units_per_mm) for v in span)
 
 
-def feed_in(cfg, span):
+def feed_in(cfg, span, registration=True):
     """CMD:318 as in SignCut's QR job files: the distance from mark 1 to the
     opposite mark along the feed (x) and across it (y), then feed_params.
     CMD:307 follows with the first mark's position and the mark spacing."""
     sx, sy = _span_units(span, cfg)
     o = cfg.mark_origin_units
-    return f"CMD:318,{sx},{sy},{cfg.feed_params};CMD:307,{o},{o},{sx},{sy};"
+    reg = f"CMD:307,{o},{o},{sx},{sy};" if registration else ""
+    return f"CMD:318,{sx},{sy},{cfg.feed_params};" + reg
 
 
 def feed_out(cfg, span):
@@ -141,6 +142,20 @@ def to_hpgl(paths, cfg, sheet=None):
         return f"IN;{feed_in(cfg, span)}{body}PU0,0;!PG;PU;{feed_out(cfg, span)}!PG;;"
     pre, post = cfg.preamble.strip(), cfg.postamble.strip()
     return pre + body + post + "\n"
+
+
+def after_feed(data: str) -> str:
+    """A job file minus its IN and CMD:318 feed-in, for a sheet that QR mode
+    has already fed in: keeps CMD:307 registration, the cuts and the
+    CMD:319 feed-out."""
+    data = data.strip().lstrip("$").rstrip("#")
+    keep = []
+    for c in data.split(";"):
+        s = c.strip()
+        if s == "IN" or s.startswith("CMD:318"):
+            continue
+        keep.append(c)
+    return ";".join(keep)
 
 
 def strip_frame(data: str) -> str:
