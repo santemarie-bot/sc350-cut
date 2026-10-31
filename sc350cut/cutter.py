@@ -75,17 +75,23 @@ def _units(mm, cfg):
     return round(mm * cfg.units_per_mm)
 
 
+def _span_units(span, cfg):
+    # SignCut floors its measured spacing (394.998 mm -> 15799); ours is
+    # exact, so round (395 mm -> 15800, as in its CMD:307/319)
+    return tuple(round(v * cfg.units_per_mm) for v in span)
+
+
 def feed_in(cfg, span):
     """CMD:318 as in SignCut's QR job files: the distance from mark 1 to the
     opposite mark along the feed (x) and across it (y), then feed_params.
     CMD:307 follows with the first mark's position and the mark spacing."""
-    sx, sy = (_units(v, cfg) for v in span)
+    sx, sy = _span_units(span, cfg)
     o = cfg.mark_origin_units
     return f"CMD:318,{sx},{sy},{cfg.feed_params};CMD:307,{o},{o},{sx},{sy};"
 
 
 def feed_out(cfg, span):
-    sx, sy = (_units(v, cfg) for v in span)
+    sx, sy = _span_units(span, cfg)
     return f"CMD:319,{sx + 800},{sy},0;"
 
 
@@ -202,12 +208,17 @@ class Link:
         out, self.buf = self.buf, ""
         return out
 
-    def expect(self, prefix, timeout):
+    def expect(self, prefix, timeout, give_up=()):
         """Wait for a reply starting with prefix (e.g. "CMD:304,"); return
-        the text after it up to the next ';', or None on timeout."""
+        the text after it up to the next ';', or None on timeout or when
+        one of the give_up words (e.g. NOQRCODE) arrives first."""
         end = time.time() + timeout
         self.s.settimeout(0.5)
         while time.time() < end:
+            for w in give_up:
+                if w in self.buf:
+                    self.buf = self.buf.split(w, 1)[1]
+                    return None
             i = self.buf.find(prefix)
             if i >= 0:
                 j = self.buf.find(";", i)

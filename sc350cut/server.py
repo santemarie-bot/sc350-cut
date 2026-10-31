@@ -94,7 +94,7 @@ class QRMode:
                             continue
                         self.say("reading the QR code")
                         link.send("CMD:305,1;CMD:304;CMD:305,0;")
-                        qr = link.expect("CMD:304,", cfg.qr_timeout)
+                        qr = link.expect("CMD:304,", cfg.qr_timeout, give_up=("NOQRCODE",))
                         hits = self.store.find(qr) if qr else []
                         meta = next((m for m in hits if m.get("status") == "queued"), hits[0] if hits else None)
                         if not meta or not (Path(meta["folder"]) / "cut.plt").exists():
