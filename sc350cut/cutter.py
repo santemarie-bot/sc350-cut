@@ -210,6 +210,9 @@ class Link:
     def send(self, text):
         if self.trace:
             self.trace(">", text if len(text) < 120 else text[:60] + f"...({len(text)} bytes)..." + text[-40:])
+        # a whole job can be a few hundred KB and the cutter takes it in slowly;
+        # the short timeout left over from expect() would cut the send off
+        self.s.settimeout(max(60.0, len(text) / 2000))
         self.s.sendall(text.encode("ascii"))
 
     def _got(self, chunk):
