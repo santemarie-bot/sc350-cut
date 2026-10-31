@@ -28,6 +28,10 @@
   .tag.done { background:var(--ok); color:#fff; }
   .tag.todo { background:#eee; color:var(--mute); }
   .job.isdone { opacity:.6; }
+  .bulk { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:10px; font-size:14px; }
+  .bulk button, #qrp { font:inherit; padding:6px 12px; border-radius:6px; border:1px solid var(--line); background:#fff; cursor:pointer; }
+  .bulk button:disabled { opacity:.5; cursor:default; }
+  .job .pick { margin-right:6px; transform:scale(1.2); }
   .ticks { display:flex; gap:16px; margin:8px 0; font-size:14px; }
   .ticks label { display:flex; gap:6px; align-items:center; cursor:pointer; }
   .detail { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:16px; min-height:300px; }
@@ -54,19 +58,25 @@
   <h1>SC-350 Cut Queue</h1>
   <nav><button id="tQueue" class="on">Active queue</button><button id="tArchive">Archive</button></nav>
   <button id="qr" title="Cutter feeds each sheet, reads its QR code and cuts the matching job">QR mode: off</button>
+  <button id="qrp" style="display:none">Pause</button>
   <span id="qrs" style="color:var(--mute);font-size:13px"></span>
   <input id="scan" placeholder="Scan a QR code or search job, file name, customer" autocomplete="off">
 </header>
 <main>
   <div>
     <div id="drop">Drop artwork here, or into the hot folder <code id="hf"></code></div>
+    <div class="bulk" id="bulk">
+      <label><input type="checkbox" id="selall"> Select all</label>
+      <button id="printsel" disabled>Print selected</button>
+      <button id="printnew">Print all not yet printed</button>
+    </div>
     <div class="list" id="list" style="margin-top:10px"></div>
   </div>
   <div class="detail" id="detail"><div class="empty">Pick a job to see its print sheet and cut lines.</div></div>
 </main>
 <div id="toast"></div>
 <script>
-let tray = "", qrOn = false, jobs = [], tab = "queued", sel = null, queueHours = 24, filter = "";
+let picked = new Set(), qrPaused = false, tray = "", qrOn = false, jobs = [], tab = "queued", sel = null, queueHours = 24, filter = "";
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 function toast(t) { const e = $("#toast"); e.textContent = t; e.style.display = "block"; clearTimeout(e._t); e._t = setTimeout(() => e.style.display = "none", 4000); }
@@ -81,6 +91,7 @@ async function load() {
   jobs = d.jobs; queueHours = d.queue_hours;
   try { tray = localStorage.getItem("tray") || d.tray; } catch (e) { tray = tray || d.tray; } $("#hf").textContent = d.hotfolder;
   qrOn = d.qr_mode.on; $("#qr").textContent = "QR mode: " + (qrOn ? "on" : "off"); $("#qr").classList.toggle("on", qrOn);
+  qrPaused = d.qr_mode.paused; $("#qrp").style.display = qrOn ? "" : "none"; $("#qrp").textContent = qrPaused ? "Resume" : "Pause";
   $("#qrs").textContent = qrOn || d.qr_mode.status !== "off" ? d.qr_mode.status : ""; render();
 }
 function render() {
@@ -91,7 +102,7 @@ function render() {
   list.sort((a, b) => done(a) - done(b) || (b.queued_at || "").localeCompare(a.queued_at || ""));
   $("#list").innerHTML = list.length ? list.map(j => `
     <div class="job ${j.id === sel ? "sel" : ""} ${done(j) ? "isdone" : ""}" data-id="${esc(j.id)}">
-      <span class="id">${esc(j.id)}</span>
+      ${j.status === "queued" && j.printable && !j.error ? `<input type="checkbox" class="pick" data-pick="${esc(j.id)}" ${picked.has(j.id) ? "checked" : ""}>` : ""}<span class="id">${esc(j.id)}</span>
       ${j.error ? '<span class="tag err">problem</span>' : done(j) ? '<span class="tag done">✓ done</span>'
         : `${j.note ? '<span class="tag warn">check</span>' : ""}<span class="tag ${j.printed_at ? "ok" : "todo"}">${j.printed_at ? "✓" : "○"} printed</span><span class="tag ${j.cut_at ? "ok" : "todo"}">${j.cut_at ? "✓" : "○"} cut</span>`}
       ${j.status === "archived" && f ? '<span class="tag">archived</span>' : ""}
@@ -99,7 +110,13 @@ function render() {
       <div class="meta">${j.status === "queued" ? left(j) : "archived " + esc((j.archived_at || "").slice(0, 10))}
         · printed ${j.prints || 0} · cut ${j.cuts || 0}${j.revision > 1 ? " · rev " + j.revision : ""}</div>
     </div>`).join("") : `<div class="empty">${f ? "No match." : tab === "queued" ? "Nothing in the queue." : "Archive is empty."}</div>`;
-  document.querySelectorAll(".job").forEach(e => e.onclick = () => { sel = e.dataset.id; render(); });
+  document.querySelectorAll(".job").forEach(e => e.onclick = ev => { if (ev.target.dataset.pick) return; sel = e.dataset.id; render(); });
+  const printable = jobs.filter(j => j.status === "queued" && j.printable && !j.error).map(j => j.id);
+  picked = new Set([...picked].filter(id => printable.includes(id)));
+  document.querySelectorAll("[data-pick]").forEach(c => c.onchange = () => {
+    c.checked ? picked.add(c.dataset.pick) : picked.delete(c.dataset.pick); bulkState(); });
+  $("#bulk").style.display = tab === "queued" ? "" : "none";
+  bulkState();
   detail();
 }
 function detail() {
@@ -151,6 +168,32 @@ async function act(id, a, body = {}) {
   if (a === "requeue") { tab = "queued"; setTab(); }
   await load();
 }
+function bulkState() {
+  const printable = jobs.filter(j => j.status === "queued" && j.printable && !j.error);
+  $("#printsel").disabled = !picked.size;
+  $("#printsel").textContent = picked.size ? `Print selected (${picked.size})` : "Print selected";
+  $("#selall").checked = printable.length > 0 && printable.every(j => picked.has(j.id));
+  const fresh = printable.filter(j => !j.printed_at).length;
+  $("#printnew").textContent = `Print all not yet printed (${fresh})`; $("#printnew").disabled = !fresh;
+}
+$("#selall").onchange = e => {
+  const printable = jobs.filter(j => j.status === "queued" && j.printable && !j.error).map(j => j.id);
+  picked = e.target.checked ? new Set(printable) : new Set(); render();
+};
+async function printMany(ids) {
+  if (!ids.length) return;
+  let d = await (await fetch("api/printmany", {method: "POST", body: JSON.stringify({ids, tray})})).json();
+  if (d.skipped && d.skipped.length && confirm(`${d.message}.\n\n${d.skipped.join(", ")} were already printed. Print them again too?`)) {
+    d = await (await fetch("api/printmany", {method: "POST", body: JSON.stringify({ids: d.skipped, tray, again: true})})).json();
+  }
+  toast(d.error || d.message); picked.clear(); await load();
+}
+$("#printsel").onclick = () => printMany([...picked]);
+$("#printnew").onclick = () => printMany(jobs.filter(j => j.status === "queued" && j.printable && !j.error && !j.printed_at).map(j => j.id));
+$("#qrp").onclick = async () => {
+  const d = await (await fetch("api/qrmode", {method: "POST", body: JSON.stringify({pause: !qrPaused})})).json();
+  toast(d.error || d.message); await load();
+};
 $("#qr").onclick = async () => {
   const d = await (await fetch("api/qrmode", {method: "POST", body: JSON.stringify({on: !qrOn})})).json();
   toast(d.error || d.message); await load();

@@ -181,6 +181,7 @@ class Link:
         except OSError as e:
             raise CutterError(f"{self.addr[0]}:{self.addr[1]}: {e.strerror or e}")
         self.buf = ""
+        self.trace = None      # callable(direction, text) to log the conversation
 
     def close(self):
         self.s.close()
@@ -192,7 +193,15 @@ class Link:
         self.close()
 
     def send(self, text):
+        if self.trace:
+            self.trace(">", text if len(text) < 120 else text[:60] + f"...({len(text)} bytes)..." + text[-40:])
         self.s.sendall(text.encode("ascii"))
+
+    def _got(self, chunk):
+        text = chunk.decode("ascii", errors="replace")
+        if self.trace:
+            self.trace("<", text)
+        self.buf += text
 
     def read(self, wait=1.0):
         """Whatever the cutter says within `wait` seconds of quiet."""
@@ -202,7 +211,7 @@ class Link:
                 chunk = self.s.recv(4096)
                 if not chunk:
                     break
-                self.buf += chunk.decode("ascii", errors="replace")
+                self._got(chunk)
         except socket.timeout:
             pass
         out, self.buf = self.buf, ""
@@ -230,7 +239,7 @@ class Link:
                 chunk = self.s.recv(4096)
                 if not chunk:
                     raise CutterError("cutter closed the connection")
-                self.buf += chunk.decode("ascii", errors="replace")
+                self._got(chunk)
             except socket.timeout:
                 pass
         return None

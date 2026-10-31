@@ -66,70 +66,105 @@ def cut_job(store, meta):
 
 
 class QRMode:
-    """Cutter-driven loop, like SignCut's spooler in QR mode: wait for a
-    sheet, feed it in, let the camera read the QR code, send that job's cut
-    lines, feed the sheet out, repeat until stopped."""
+    """Cutter-driven loop, like SignCut's spooler in QR mode: for every sheet
+    in the feed tray, read its QR code, cut the matching job (or feed the
+    sheet straight through if the code is unknown), and go on to the next
+    sheet until the tray is empty or the user stops."""
 
     def __init__(self, store):
         self.store, self.on, self.status, self.thread = store, False, "off", None
-        self.done = 0
+        self.done = self.ejected = 0
+        self.paused = False
 
     def set(self, on):
         if on and not self.on:
-            self.on = True
+            self.on, self.paused = True, False
+            self.done = self.ejected = 0
             self.thread = threading.Thread(target=self.run, daemon=True)
             self.thread.start()
         elif not on:
             self.on = False
-            self.status = "stopping"
+            self.status = "stopping after this sheet"
+
+    def pause(self, paused):
+        self.paused = paused and self.on
+        if self.on:
+            self.say("paused: finishes this sheet, then waits" if self.paused else "resumed")
 
     def say(self, msg):
         self.status = msg
         log(f"QR mode: {msg}")
 
+    def _trace(self, direction, text):
+        if self.store.cfg.cutter_trace:
+            log(f"cutter {direction} {text.strip()}")
+
     def run(self):
         cfg = self.store.cfg
+        empty_since = None
         while self.on:
             try:
                 with cutter.Link(cfg) as link:
-                    self.say("connected, waiting for a sheet")
+                    link.trace = self._trace
+                    self.say("connected, checking the feed tray")
                     while self.on:
+                        if self.paused:
+                            self.status = f"paused ({self.done} cut, {self.ejected} ejected)"
+                            time.sleep(1)
+                            continue
                         link.send("CMD:320;")
                         loaded = link.expect("CMD:320,", 5)
                         if loaded is None:
-                            self.say("cutter does not answer CMD:320 (material check) on this port")
-                            time.sleep(5)
+                            self.say("cutter does not answer the feed check (CMD:320); retrying")
+                            time.sleep(3)
                             continue
                         if loaded.strip() != "4":
-                            self.status = "waiting for a sheet"
+                            empty_since = empty_since or time.time()
+                            self.status = (f"feed tray empty: {self.done} cut, {self.ejected} ejected. "
+                                           "Load sheets to carry on, or switch QR mode off")
                             time.sleep(2)
                             continue
+                        empty_since = None
                         self.say("reading the QR code")
                         link.send("CMD:305,1;CMD:304;CMD:305,0;")
                         qr = link.expect("CMD:304,", cfg.qr_timeout, give_up=("NOQRCODE",))
                         hits = self.store.find(qr) if qr else []
                         meta = next((m for m in hits if m.get("status") == "queued"), hits[0] if hits else None)
                         if not meta or not (Path(meta["folder"]) / "cut.plt").exists():
-                            self.say(f"no job for QR '{qr}', sheet fed through" if qr else "no QR code read, sheet fed through")
+                            self.ejected += 1
+                            self.say(f"no job for QR '{qr}', ejecting the sheet" if qr else "no QR code found, ejecting the sheet")
                             link.send(cutter.EMPTY_JOB)
-                            time.sleep(3)
+                            self._wait_idle(link)
                             continue
                         job = (Path(meta["folder"]) / "cut.plt").read_text().strip().lstrip("$").rstrip("#")
-                        self.say(f"cutting {meta['id']}")
+                        self.say(f"cutting {meta['id']} ({meta['name']})")
                         link.send(job)
-                        result = link.expect("CMD:307,", 600)
+                        result = link.expect("CMD:307,", cfg.cut_timeout)
+                        self._wait_idle(link)
                         self.done += 1
                         self.store.note(meta["id"], f"cut in QR mode ({result or 'no result reply'})",
                                         cuts=meta.get("cuts", 0) + 1, cut_at=now_iso())
-                        self.say(f"{meta['id']} cut: {result or 'no result reply'}; waiting for the next sheet")
-                        time.sleep(1)
+                        self.say(f"{meta['id']} cut ({result or 'no result reply'}); {self.done} cut so far, next sheet")
+                    self.say(f"stopped: {self.done} cut, {self.ejected} ejected")
             except Exception as e:
                 self.say(f"problem: {e}; retrying in 10 s")
                 for _ in range(10):
                     if not self.on:
                         break
                     time.sleep(1)
-        self.status = "off"
+        self.status = f"off ({self.done} cut, {self.ejected} ejected)" if self.done or self.ejected else "off"
+
+    def _wait_idle(self, link, limit=120):
+        """Poll CMD:100 (as SignCut's spooler does) until the cutter says OK,
+        so the next sheet is only asked for once this one is out."""
+        end = time.time() + limit
+        while time.time() < end:
+            link.send("CMD:100;")
+            r = link.expect("CMD:100,", 5)
+            if r is not None and r.strip().upper().startswith("OK"):
+                return True
+            time.sleep(1)
+        return False
 
 
 def make_handler(store: Store, qr: "QRMode"):
@@ -163,7 +198,7 @@ def make_handler(store: Store, qr: "QRMode"):
                 default_tray = next((k for k, v in TRAYS.items() if v == media), "")
                 return self._send(200, {"jobs": jobs, "queue_hours": store.cfg.queue_hours, "tray": default_tray,
                                         "hotfolder": str(store.cfg.hotfolder),
-                                        "qr_mode": {"on": qr.on, "status": qr.status, "done": qr.done}})
+                                        "qr_mode": {"on": qr.on, "paused": qr.paused, "status": qr.status, "done": qr.done}})
             if parts == ["api", "find"]:
                 q = parse_qs(u.query).get("q", [""])[0]
                 return self._send(200, {"ids": [m["id"] for m in store.find(q)]})
@@ -198,8 +233,30 @@ def make_handler(store: Store, qr: "QRMode"):
                     return self._send(200, {"ok": True})
                 body = json.loads(self.rfile.read(length) or b"{}")
                 if parts == ["api", "qrmode"]:
+                    if "pause" in body:
+                        qr.pause(bool(body["pause"]))
+                        return self._send(200, {"ok": True, "message": "paused" if qr.paused else "resumed"})
                     qr.set(bool(body.get("on")))
                     return self._send(200, {"ok": True, "message": "QR mode " + ("on" if qr.on else "off")})
+                if parts == ["api", "printmany"]:
+                    done, skipped, failed = [], [], []
+                    for jid in body.get("ids", []):
+                        m = store.load(jid)
+                        if not m or m.get("error") or not m.get("printable"):
+                            failed.append(jid); continue
+                        if m.get("printed_at") and not body.get("again"):
+                            skipped.append(jid); continue
+                        try:
+                            print_job(store, m, str(body.get("tray") or "") or None)
+                            done.append(jid)
+                        except Exception as e:
+                            failed.append(f"{jid} ({e})")
+                    msg = f"sent {len(done)} to the printer"
+                    if skipped:
+                        msg += f", skipped {len(skipped)} already printed"
+                    if failed:
+                        msg += f", could not print {', '.join(failed)}"
+                    return self._send(200, {"ok": True, "message": msg, "skipped": skipped})
                 if len(parts) != 3 or parts[0] != "api":
                     return self._send(404, {"error": "not found"})
                 jid, action = parts[1], parts[2]

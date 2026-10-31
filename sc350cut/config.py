@@ -46,6 +46,8 @@ class Config:
     cutter_baud: int = 38400
     protocol: str = "signcut"          # signcut = CMD:318/319 feed framing; plain = preamble/postamble only
     feed_params: str = "600,600,0"     # last three CMD:318 values, as in SignCut's QR job files
+    cut_timeout: float = 300.0         # QR mode: seconds to wait for a sheet's cut result
+    cutter_trace: bool = True          # log every command and reply in QR mode (journalctl -u sc350cut)
     qr_timeout: float = 60.0           # QR mode: seconds to wait for the cutter to read a QR code
     units_per_mm: float = 40.0
     speed: int = 0                     # VS value, 0 = leave cutter default

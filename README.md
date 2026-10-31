@@ -33,7 +33,12 @@ Portrait sheets are turned so the long side runs along the feed.
 
 **QR mode** (button at the top of the page): the server keeps a connection to the cutter, waits for a sheet
 (`CMD:320`), feeds it in, asks the camera for the QR code (`CMD:304`), sends the matching job's cut lines,
-and feeds the sheet out. Load sheets one after another; each is cut by its own QR code.
+and feeds the sheet out, then carries on with the next sheet until the feed tray is empty or you
+switch it off. A sheet with no QR code, or one that matches no job, is fed straight through.
+Pause finishes the current sheet and waits. Every command and reply is logged
+(`journalctl -u sc350cut -f`). QR mode is off after a restart of the service.
+
+**Printing several jobs**: tick jobs in the queue and click "Print selected", or "Print all not yet printed".
 
 ## Still to confirm on the real machine
 
