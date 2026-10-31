@@ -11,7 +11,7 @@ C:\\signcut\\<qr>.plt (notes/53061867.plt) are what we copy:
   IN;CMD:318,<mark span x>,<y>,600,600,0;CMD:307,100,100,<x>,<y>;PU;SP1; ...cuts...
   PU0,0;!PG;PU;CMD:319,<x+800>,<y>,0;!PG;;
 
-with cut coordinates counted from the centre of the first mark.
+with the first mark's centre at 100,100 (measured from 53061867.ai).
 CMD:318 feeds the sheet in and finds the marks, CMD:319 feeds it out.
 Units are 0.025 mm. The cutter answers on the same connection (CMD:100
 status, CMD:304 QR text, CMD:307 cut OK/NG), so the link is two-way.
@@ -26,10 +26,13 @@ from pathlib import Path
 
 
 def transform(paths, cfg, origin_xy=(0.0, 0.0)):
-    """Sheet mm paths -> cutter mm paths (origin shift, optional mirror)."""
+    """Sheet mm paths -> cutter mm paths (origin shift, optional mirror).
+    SignCut puts the first mark centre at 100,100 plotter units (2.5 mm),
+    not at 0,0, so that offset is added (cfg.mark_origin_units)."""
     ox, oy = origin_xy
+    off = cfg.mark_origin_units / cfg.units_per_mm
     sign = -1 if cfg.mirror else 1
-    return [[(sign * (x - ox), y - oy) for x, y in path] for path in paths]
+    return [[(sign * (x - ox) + off, y - oy + off) for x, y in path] for path in paths]
 
 
 def rotate(paths, origin, sheet):
@@ -75,9 +78,10 @@ def _units(mm, cfg):
 def feed_in(cfg, span):
     """CMD:318 as in SignCut's QR job files: the distance from mark 1 to the
     opposite mark along the feed (x) and across it (y), then feed_params.
-    CMD:307 follows with the same mark rectangle."""
+    CMD:307 follows with the first mark's position and the mark spacing."""
     sx, sy = (_units(v, cfg) for v in span)
-    return f"CMD:318,{sx},{sy},{cfg.feed_params};CMD:307,100,100,{sx},{sy};"
+    o = cfg.mark_origin_units
+    return f"CMD:318,{sx},{sy},{cfg.feed_params};CMD:307,{o},{o},{sx},{sy};"
 
 
 def feed_out(cfg, span):

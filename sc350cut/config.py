@@ -47,6 +47,7 @@ class Config:
     speed: int = 0                     # VS value, 0 = leave cutter default
     force: int = 0                     # FS value, 0 = leave cutter default
     origin: str = "mark1"              # cut 0,0: mark1 = centre of the bottom-left mark (as SignCut), mark1corner, or sheet
+    mark_origin_units: int = 100       # plotter units at the first mark's centre (SignCut: 100,100)
     rotate_portrait: bool = True       # turn portrait sheets so the long side runs along the feed
     preamble: str = "IN;"
     postamble: str = "PU0,0;SP0;"
