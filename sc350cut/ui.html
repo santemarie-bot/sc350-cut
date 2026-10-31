@@ -25,6 +25,11 @@
   .tag { display:inline-block; font-size:12px; padding:1px 6px; border-radius:4px; margin-left:6px; }
   .tag.err { background:#fbe9e7; color:var(--err); } .tag.warn { background:#fff3e0; color:var(--warn); }
   .tag.ok { background:#e6f4ea; color:var(--ok); }
+  .tag.done { background:var(--ok); color:#fff; }
+  .tag.todo { background:#eee; color:var(--mute); }
+  .job.isdone { opacity:.6; }
+  .ticks { display:flex; gap:16px; margin:8px 0; font-size:14px; }
+  .ticks label { display:flex; gap:6px; align-items:center; cursor:pointer; }
   .detail { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:16px; min-height:300px; }
   .detail h2 { margin:0 0 4px; font-family:ui-monospace, monospace; }
   .actions { display:flex; flex-wrap:wrap; gap:8px; margin:12px 0; }
@@ -80,11 +85,13 @@ function render() {
   const f = filter.toLowerCase();
   let list = jobs.filter(j => j.status === tab);
   if (f) list = jobs.filter(j => [j.id, j.qr, j.name, j.customer].some(v => (v || "").toLowerCase().includes(f)));
-  list.sort((a, b) => (b.queued_at || "").localeCompare(a.queued_at || ""));
+  const done = j => !!(j.printed_at && j.cut_at);
+  list.sort((a, b) => done(a) - done(b) || (b.queued_at || "").localeCompare(a.queued_at || ""));
   $("#list").innerHTML = list.length ? list.map(j => `
-    <div class="job ${j.id === sel ? "sel" : ""}" data-id="${esc(j.id)}">
+    <div class="job ${j.id === sel ? "sel" : ""} ${done(j) ? "isdone" : ""}" data-id="${esc(j.id)}">
       <span class="id">${esc(j.id)}</span>
-      ${j.error ? '<span class="tag err">problem</span>' : j.note ? '<span class="tag warn">check</span>' : '<span class="tag ok">ready</span>'}
+      ${j.error ? '<span class="tag err">problem</span>' : done(j) ? '<span class="tag done">✓ done</span>'
+        : `${j.note ? '<span class="tag warn">check</span>' : ""}<span class="tag ${j.printed_at ? "ok" : "todo"}">${j.printed_at ? "✓" : "○"} printed</span><span class="tag ${j.cut_at ? "ok" : "todo"}">${j.cut_at ? "✓" : "○"} cut</span>`}
       ${j.status === "archived" && f ? '<span class="tag">archived</span>' : ""}
       <div>${esc(j.name)}${j.customer ? " · " + esc(j.customer) : ""}</div>
       <div class="meta">${j.status === "queued" ? left(j) : "archived " + esc((j.archived_at || "").slice(0, 10))}
@@ -101,6 +108,10 @@ function detail() {
     <h2>${esc(j.id)}</h2><div>${esc(j.name)}</div>
     ${j.error ? `<p class="tag err" style="display:block;padding:8px">${esc(j.error)}</p>` : ""}
     ${j.note ? `<p class="tag warn" style="display:block;padding:8px">${esc(j.note)}</p>` : ""}
+    <div class="ticks">
+      <label><input type="checkbox" data-mark="printed" ${j.printed_at ? "checked" : ""}> Printed${j.printed_at ? " " + esc(j.printed_at.slice(11, 16)) : ""}</label>
+      <label><input type="checkbox" data-mark="cut" ${j.cut_at ? "checked" : ""}> Cut${j.cut_at ? " " + esc(j.cut_at.slice(11, 16)) : ""}</label>
+    </div>
     <div class="actions">
       ${j.printable && !j.error ? `<button data-a="print">Print with marks</button>` : ""}
       ${!j.error ? `<button class="primary" data-a="cut">Cut now</button>` : ""}
@@ -120,12 +131,18 @@ function detail() {
     </dl>
     <div class="hist">${(j.history || []).slice().reverse().map(h => `${esc(h[0].replace("T", " ").slice(0, 16))} ${esc(h[1])}`).join("<br>")}</div>`;
   document.querySelectorAll("[data-a]").forEach(b => b.onclick = () => act(j.id, b.dataset.a));
+  document.querySelectorAll("[data-mark]").forEach(c => c.onchange = () => act(j.id, "mark", {what: c.dataset.mark, on: c.checked}));
   $("#cust").onchange = e => act(j.id, "customer", {customer: e.target.value});
 }
 async function act(id, a, body = {}) {
   if (a === "delete" && !confirm(`Delete ${id} for good?`)) return;
   const r = await fetch(`api/${encodeURIComponent(id)}/${a}`, {method: "POST", body: JSON.stringify(body)});
-  const d = await r.json(); toast(d.error ? "Problem: " + d.error : `${id}: ${d.message}`);
+  const d = await r.json();
+  if (r.status === 409 && d.confirm) {
+    if (confirm(d.confirm)) return act(id, a, {...body, again: true});
+    return;
+  }
+  toast(d.error ? "Problem: " + d.error : `${id}: ${d.message}`);
   if (a === "requeue") { tab = "queued"; setTab(); }
   await load();
 }

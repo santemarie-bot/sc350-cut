@@ -204,7 +204,8 @@ class Store:
         art = folder / ("artwork" + src.suffix.lower())
         shutil.move(str(src), art)
         meta.update(folder=str(folder), name=src.name, hash=digest, revision=rev + 1,
-                    artwork=art.name, queued_at=now_iso(), status="queued", error="", note="")
+                    artwork=art.name, queued_at=now_iso(), status="queued", error="", note="",
+                    printed_at="", cut_at="")
         meta["history"].append([now_iso(), f"updated artwork {src.name} (revision {rev + 1})"])
         self.save(meta)
         self.log(f"{src.name}: new revision of {jid}")
@@ -280,7 +281,7 @@ class Store:
             qx, qy = marks.qr_position(cfg, W, H)
             parts.append(f'<rect x="{qx:.2f}" y="{H - qy - q:.2f}" width="{q}" height="{q}" '
                          f'fill="none" stroke="#000" stroke-width="0.4" stroke-dasharray="1 1"/>')
-            parts.append(f'<text x="{qx + q + 2:.2f}" y="{H - qy - q / 2 + 1:.2f}" font-size="3" '
+            parts.append(f'<text x="{marks.qr_label_x(cfg, meta["id"], W, H):.2f}" y="{H - qy - q / 2 + 1:.2f}" font-size="3" '
                          f'font-family="sans-serif">QR {meta["id"]}</text>')
         for p in sheet_paths:
             d = "M" + " L".join(f"{x:.2f},{H - y:.2f}" for x, y in p)
@@ -306,7 +307,8 @@ class Store:
             if not meta:
                 raise KeyError(jid)
             self._move_to_queue(meta)
-            meta.update(status="queued", queued_at=now_iso())
+            # a new order: clear the printed / cut ticks of the last one
+            meta.update(status="queued", queued_at=now_iso(), printed_at="", cut_at="")
             meta["history"].append([now_iso(), why])
             self.save(meta)
             # keep the PLT the cutter loads by QR in place

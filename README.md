@@ -8,8 +8,9 @@ Replaces SignCut Pro + spooler in the Windows VM for the Vulcan SC-350 sheet cut
 2. **Job + QR**: each new artwork gets a job ID such as `ALT-261028-001`. The software lays it on the print sheet with 4 registration marks (5 mm, 10 mm from the edge, same as SignCut's Vulcan defaults) and a QR code holding the job ID, and saves `print.pdf`. The cut lines are taken out of `print.pdf`, so the Xerox prints only the artwork, marks and QR code.
 3. **Cut file**: the CutContour line (by layer/name, or magenta stroke) becomes `cut.plt` (HP-GL), measured from registration mark 1. A copy named by the QR text goes to `/srv/cut/plt`.
 4. **Active cut queue** (web page on port 8350): shows each job with a preview, Print (sends print.pdf to the Xerox through CUPS), Cut (sends to the cutter at 192.168.0.52), and the time left.
-5. **Archive**: after 24 hours a job moves to `/srv/cut/archive/YYYY/MM/<job id>`. Search or scan the QR to find it, then "Reuse" puts it back in the queue.
-6. **Repeat orders**: dropping the same artwork again puts the existing job straight back in the queue (same job ID, same QR, files ready). Dropping a file with the same name but changed artwork makes a new revision of that job and keeps the old one in `versions/`.
+5. **Printed / cut ticks**: each job shows ✓ printed and ✓ cut once done (ticked automatically, or by hand on the job page). Done jobs drop to the bottom of the queue, and printing or cutting a job again asks first. A repeat order clears the ticks.
+6. **Archive**: after 24 hours a job moves to `/srv/cut/archive/YYYY/MM/<job id>`. Search or scan the QR to find it, then "Reuse" puts it back in the queue.
+7. **Repeat orders**: dropping the same artwork again puts the existing job straight back in the queue (same job ID, same QR, files ready). Dropping a file with the same name but changed artwork makes a new revision of that job and keeps the old one in `versions/`.
 
 Files that can't be used go to `hotfolder/_rejected` with a `.txt` saying why.
 

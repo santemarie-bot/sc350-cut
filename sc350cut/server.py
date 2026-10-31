@@ -10,7 +10,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from . import cutter
-from .jobs import Store
+from .jobs import Store, now_iso
 
 UI = Path(__file__).with_name("ui.html")
 FILES = {"preview.svg", "print.pdf", "cut.plt"}
@@ -45,14 +45,15 @@ def print_job(store, meta):
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     if r.returncode:
         raise RuntimeError(r.stderr.strip() or "lp failed")
-    store.note(meta["id"], f"sent to printer {cfg.printer or '(default)'}", prints=meta.get("prints", 0) + 1)
+    store.note(meta["id"], f"sent to printer {cfg.printer or '(default)'}", prints=meta.get("prints", 0) + 1,
+               printed_at=now_iso())
     return r.stdout.strip()
 
 
 def cut_job(store, meta):
     data = (Path(meta["folder"]) / "cut.plt").read_text()
     msg = cutter.send(data, store.cfg)
-    store.note(meta["id"], f"sent to cutter: {msg}", cuts=meta.get("cuts", 0) + 1)
+    store.note(meta["id"], f"sent to cutter: {msg}", cuts=meta.get("cuts", 0) + 1, cut_at=now_iso())
     return msg
 
 
@@ -111,7 +112,7 @@ class QRMode:
                         result = link.expect("CMD:307,", 600)
                         self.done += 1
                         self.store.note(meta["id"], f"cut in QR mode ({result or 'no result reply'})",
-                                        cuts=meta.get("cuts", 0) + 1)
+                                        cuts=meta.get("cuts", 0) + 1, cut_at=now_iso())
                         self.say(f"{meta['id']} cut: {result or 'no result reply'}; waiting for the next sheet")
                         time.sleep(1)
             except Exception as e:
@@ -195,10 +196,20 @@ def make_handler(store: Store, qr: "QRMode"):
                 meta = store.load(jid)
                 if not meta:
                     return self._send(404, {"error": f"no job {jid}"})
+                again = {"print": "printed_at", "cut": "cut_at"}.get(action)
+                if again and meta.get(again) and not body.get("again"):
+                    # already done for this order: ask before doing it twice
+                    return self._send(409, {"confirm": f"{jid} was already {'printed' if action == 'print' else 'cut'} "
+                                                       f"at {meta[again][11:16]} on {meta[again][:10]}. Do it again?"})
                 if action == "print":
                     msg = print_job(store, meta)
                 elif action == "cut":
                     msg = cut_job(store, meta)
+                elif action == "mark":
+                    field = {"printed": "printed_at", "cut": "cut_at"}[body.get("what")]
+                    on = bool(body.get("on"))
+                    store.note(jid, f"marked {'as' if on else 'not'} {body['what']} by hand", **{field: now_iso() if on else ""})
+                    msg = f"marked {'' if on else 'not '}{body['what']}"
                 elif action == "requeue":
                     store.requeue(jid); msg = "back in the cut queue"
                 elif action == "archive":

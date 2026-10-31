@@ -86,9 +86,26 @@ def cut_origin(cfg, W=None, H=None):
 
 
 def qr_position(cfg, W=None, H=None):
-    """Bottom-left corner of the QR code: next to mark 1 on the bottom edge."""
-    mx, my = mark_centres(cfg, W, H)[0]
-    return mx + cfg.mark_size_mm / 2 + GAP_MM * 2, my - cfg.qr_size_mm / 2
+    """Bottom-left corner of the QR code, on the bottom edge beside the mark
+    the cutter starts from (as SignCut's plugin does): the bottom-right mark
+    on a portrait sheet that goes in turned, else the bottom-left one."""
+    W, H = W or cfg.sheet_width_mm, H or cfg.sheet_height_mm
+    centres = mark_centres(cfg, W, H)
+    gap = cfg.mark_size_mm / 2 + GAP_MM * 2
+    if W < H and cfg.rotate_portrait:
+        mx, my = centres[1]
+        return mx - gap - cfg.qr_size_mm, my - cfg.qr_size_mm / 2
+    mx, my = centres[0]
+    return mx + gap, my - cfg.qr_size_mm / 2
+
+
+def qr_label_x(cfg, job_id, W=None, H=None):
+    """Where the job ID text starts: beside the QR, away from the mark."""
+    W, H = W or cfg.sheet_width_mm, H or cfg.sheet_height_mm
+    qx, _ = qr_position(cfg, W, H)
+    if W < H and cfg.rotate_portrait:
+        return qx - 2 - len(job_id) * 1.9
+    return qx + cfg.qr_size_mm + 2
 
 
 def print_area(cfg, W=None, H=None):
@@ -118,7 +135,7 @@ def _overlay(cfg, job_id, qr_payload, path: Path, W_mm, H_mm):
     d.add(w)
     renderPDF.draw(d, c, qx * mm, qy * mm)
     c.setFont("Helvetica", 8)
-    c.drawString((qx + q + 2) * mm, (qy + q / 2 - 1) * mm, job_id)
+    c.drawString(qr_label_x(cfg, job_id, W_mm, H_mm) * mm, (qy + q / 2 - 1) * mm, job_id)
     c.showPage()
     c.save()
 
