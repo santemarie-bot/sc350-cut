@@ -95,7 +95,7 @@ class Store:
         self.log(f"{jid}: new print sheet layout, remaking print.pdf (print it again)")
         meta = self.prepare(jid)
         if not meta.get("error") and meta.get("printed_at"):
-            meta.update(printed_at="", cut_at="")
+            meta.update(printed_at="", cut_at="", sheets_cut=0)
             meta.setdefault("history", []).append([now_iso(), "new print sheet layout, needs printing again"])
             self.save(meta)
         if old.name != f"{self.qr_text(jid)}.plt":
@@ -232,7 +232,7 @@ class Store:
         shutil.move(str(src), art)
         meta.update(folder=str(folder), name=src.name, hash=digest, revision=rev + 1,
                     artwork=art.name, queued_at=now_iso(), status="queued", error="", note="",
-                    printed_at="", cut_at="")
+                    printed_at="", cut_at="", sheets_cut=0)
         meta["history"].append([now_iso(), f"updated artwork {src.name} (revision {rev + 1})"])
         self.save(meta)
         self.log(f"{src.name}: new revision of {jid}")
@@ -337,7 +337,7 @@ class Store:
             self._refresh(jid)
             meta = self.load(jid)
             # a new order: clear the printed / cut ticks of the last one
-            meta.update(status="queued", queued_at=now_iso(), printed_at="", cut_at="")
+            meta.update(status="queued", queued_at=now_iso(), printed_at="", cut_at="", sheets_cut=0)
             meta["history"].append([now_iso(), why])
             self.save(meta)
             # keep the PLT the cutter loads by QR in place

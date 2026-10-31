@@ -32,6 +32,8 @@
   .bulk button, #qrp { font:inherit; padding:6px 12px; border-radius:6px; border:1px solid var(--line); background:#fff; cursor:pointer; }
   .bulk button:disabled { opacity:.5; cursor:default; }
   .job .pick { margin-right:6px; transform:scale(1.2); }
+  .copies { width:64px; font:inherit; padding:2px 6px; border:1px solid var(--line); border-radius:6px; }
+  .cp { font-size:13px; color:var(--mute); margin-top:4px; display:flex; gap:6px; align-items:center; }
   .ticks { display:flex; gap:16px; margin:8px 0; font-size:14px; }
   .ticks label { display:flex; gap:6px; align-items:center; cursor:pointer; }
   .detail { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:16px; min-height:300px; }
@@ -78,6 +80,7 @@
 <script>
 let picked = new Set(), qrPaused = false, tray = "", qrOn = false, jobs = [], tab = "queued", sel = null, queueHours = 24, filter = "";
 const $ = s => document.querySelector(s);
+const copies = j => Math.max(1, parseInt(j.copies) || 1);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 function toast(t) { const e = $("#toast"); e.textContent = t; e.style.display = "block"; clearTimeout(e._t); e._t = setTimeout(() => e.style.display = "none", 4000); }
 function left(j) {
@@ -107,10 +110,13 @@ function render() {
         : `${j.note ? '<span class="tag warn">check</span>' : ""}<span class="tag ${j.printed_at ? "ok" : "todo"}">${j.printed_at ? "✓" : "○"} printed</span><span class="tag ${j.cut_at ? "ok" : "todo"}">${j.cut_at ? "✓" : "○"} cut</span>`}
       ${j.status === "archived" && f ? '<span class="tag">archived</span>' : ""}
       <div>${esc(j.name)}${j.customer ? " · " + esc(j.customer) : ""}</div>
+      ${j.status === "queued" && j.printable && !j.error ? `<div class="cp">Copies <input type="number" min="1" max="999" class="copies" data-copies="${esc(j.id)}" value="${copies(j)}">
+        ${j.printed_at ? `· sheets cut ${j.sheets_cut || 0} of ${copies(j)}` : ""}</div>` : ""}
       <div class="meta">${j.status === "queued" ? left(j) : "archived " + esc((j.archived_at || "").slice(0, 10))}
         · printed ${j.prints || 0} · cut ${j.cuts || 0}${j.revision > 1 ? " · rev " + j.revision : ""}</div>
     </div>`).join("") : `<div class="empty">${f ? "No match." : tab === "queued" ? "Nothing in the queue." : "Archive is empty."}</div>`;
-  document.querySelectorAll(".job").forEach(e => e.onclick = ev => { if (ev.target.dataset.pick) return; sel = e.dataset.id; render(); });
+  document.querySelectorAll(".job").forEach(e => e.onclick = ev => { if (ev.target.dataset.pick || ev.target.dataset.copies) return; sel = e.dataset.id; render(); });
+  document.querySelectorAll("[data-copies]").forEach(c => c.onchange = () => setCopies(c.dataset.copies, c.value));
   const printable = jobs.filter(j => j.status === "queued" && j.printable && !j.error).map(j => j.id);
   picked = new Set([...picked].filter(id => printable.includes(id)));
   document.querySelectorAll("[data-pick]").forEach(c => c.onchange = () => {
@@ -132,7 +138,8 @@ function detail() {
       <label><input type="checkbox" data-mark="cut" ${j.cut_at ? "checked" : ""}> Cut${j.cut_at ? " " + esc(j.cut_at.slice(11, 16)) : ""}</label>
     </div>
     <div class="actions">
-      ${j.printable && !j.error ? `<button data-a="print">Print with marks</button>
+      ${j.printable && !j.error ? `<label class="cp" style="margin:0">Copies <input type="number" min="1" max="999" class="copies" id="dcopies" value="${copies(j)}"></label>
+        <button data-a="print">Print with marks</button>
         <select id="tray" title="Xerox paper tray">${[["5", "Tray 5 (bypass)"], ["1", "Tray 1"], ["2", "Tray 2"], ["3", "Tray 3"]]
           .map(([v, t]) => `<option value="${v}" ${v === tray ? "selected" : ""}>${t}</option>`).join("")}</select>` : ""}
       ${!j.error ? `<button class="primary" data-a="cut">Cut now</button>` : ""}
@@ -155,6 +162,13 @@ function detail() {
   if ($("#tray")) $("#tray").onchange = e => { tray = e.target.value; try { localStorage.setItem("tray", tray); } catch (_) {} };
   document.querySelectorAll("[data-mark]").forEach(c => c.onchange = () => act(j.id, "mark", {what: c.dataset.mark, on: c.checked}));
   $("#cust").onchange = e => act(j.id, "customer", {customer: e.target.value});
+  if ($("#dcopies")) $("#dcopies").onchange = e => setCopies(j.id, e.target.value);
+}
+async function setCopies(id, v) {
+  const n = Math.max(1, Math.min(999, parseInt(v) || 1));
+  const j = jobs.find(x => x.id === id); if (j) j.copies = n;
+  await fetch(`api/${encodeURIComponent(id)}/copies`, {method: "POST", body: JSON.stringify({copies: n})});
+  await load();
 }
 async function act(id, a, body = {}) {
   if (a === "delete" && !confirm(`Delete ${id} for good?`)) return;
@@ -224,7 +238,7 @@ drop.ondrop = async e => {
   }
   setTimeout(load, 5000);
 };
-load(); setInterval(load, 5000);
+load(); setInterval(() => { const a = document.activeElement; if (!a || !a.matches("input.copies, #cust")) load(); }, 5000);
 </script>
 </body>
 </html>

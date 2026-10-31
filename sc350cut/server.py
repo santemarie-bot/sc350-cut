@@ -36,8 +36,16 @@ def worker(store: Store):
 TRAYS = {"5": "manual", "1": "tray-1", "2": "tray-2", "3": "tray-3", "4": "tray-4"}
 
 
+def copies_of(meta):
+    try:
+        return max(1, min(999, int(meta.get("copies") or 1)))
+    except (TypeError, ValueError):
+        return 1
+
+
 def print_job(store, meta, tray=None):
     cfg = store.cfg
+    n = copies_of(meta)
     if not meta.get("printable"):
         raise RuntimeError("this job has no print sheet")
     opts = []
@@ -48,20 +56,21 @@ def print_job(store, meta, tray=None):
     if tray in TRAYS and not any(o.startswith("media=") for o in opts):
         opts += ["-o", "media=" + TRAYS[tray]]
     cmd = ["lp"] + (["-d", cfg.printer] if cfg.printer else []) + opts + \
-        ["-t", meta["id"], str(Path(meta["folder"]) / "print.pdf")]
+        ["-n", str(n), "-t", meta["id"], str(Path(meta["folder"]) / "print.pdf")]
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     if r.returncode:
         raise RuntimeError(r.stderr.strip() or "lp failed")
     where = f"tray {tray}" if tray in TRAYS else "default tray"
-    store.note(meta["id"], f"sent to printer {cfg.printer or '(default)'}, {where}", prints=meta.get("prints", 0) + 1,
-               printed_at=now_iso())
+    store.note(meta["id"], f"sent {n} {'copy' if n == 1 else 'copies'} to printer {cfg.printer or '(default)'}, {where}",
+               prints=meta.get("prints", 0) + n, printed_at=now_iso(), sheets_cut=0, cut_at="")
     return r.stdout.strip()
 
 
 def cut_job(store, meta):
     data = (Path(meta["folder"]) / "cut.plt").read_text()
     msg = cutter.send(data, store.cfg)
-    store.note(meta["id"], f"sent to cutter: {msg}", cuts=meta.get("cuts", 0) + 1, cut_at=now_iso())
+    store.note(meta["id"], f"sent to cutter: {msg}", cuts=meta.get("cuts", 0) + 1, cut_at=now_iso(),
+               sheets_cut=meta.get("sheets_cut", 0) + 1)
     return msg
 
 
@@ -190,9 +199,13 @@ class QRMode:
                         result = link.expect("CMD:319,", cfg.cut_timeout)
                         self._wait_idle(link)
                         self.done += 1
-                        self.store.note(meta["id"], f"cut in QR mode ({'finished' if result else 'no finish reply'})",
-                                        cuts=meta.get("cuts", 0) + 1, cut_at=now_iso())
-                        self.say(f"{meta['id']} cut; {self.done} cut so far, next sheet")
+                        # the job counts as cut once every printed copy has been cut
+                        meta = self.store.load(meta["id"]) or meta
+                        got, want = meta.get("sheets_cut", 0) + 1, copies_of(meta)
+                        self.store.note(meta["id"], f"sheet {got} of {want} cut in QR mode ({'finished' if result else 'no finish reply'})",
+                                        cuts=meta.get("cuts", 0) + 1, sheets_cut=got,
+                                        **({"cut_at": now_iso()} if got >= want else {}))
+                        self.say(f"{meta['id']} sheet {got} of {want} cut; {self.done} cut so far, next sheet")
                     self.say(f"stopped: {self.done} cut, {self.ejected} ejected")
             except Exception as e:
                 self.say(f"problem: {e}; retrying in 10 s")
@@ -323,7 +336,8 @@ def make_handler(store: Store, qr: "QRMode"):
                 elif action == "mark":
                     field = {"printed": "printed_at", "cut": "cut_at"}[body.get("what")]
                     on = bool(body.get("on"))
-                    store.note(jid, f"marked {'as' if on else 'not'} {body['what']} by hand", **{field: now_iso() if on else ""})
+                    extra = {"sheets_cut": copies_of(meta) if on else 0} if field == "cut_at" else {}
+                    store.note(jid, f"marked {'as' if on else 'not'} {body['what']} by hand", **{field: now_iso() if on else ""}, **extra)
                     msg = f"marked {'' if on else 'not '}{body['what']}"
                 elif action == "requeue":
                     store.requeue(jid); msg = "back in the cut queue"
@@ -333,6 +347,10 @@ def make_handler(store: Store, qr: "QRMode"):
                     store.prepare(jid); msg = "rebuilt"
                 elif action == "delete":
                     store.delete(jid); msg = "deleted"
+                elif action == "copies":
+                    n = copies_of({"copies": body.get("copies")})
+                    store.note(jid, f"copies set to {n}", copies=n)
+                    msg = f"{n} {'copy' if n == 1 else 'copies'}"
                 elif action == "customer":
                     store.note(jid, "customer set", customer=str(body.get("customer", ""))[:200])
                     msg = "saved"
