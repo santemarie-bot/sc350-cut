@@ -275,12 +275,12 @@ class Store:
         elif meta.get("printable"):
             s = cfg.mark_size_mm
             for x, y in marks.mark_centres(cfg, W, H):
-                parts.append(f'<rect x="{x - s / 2:.2f}" y="{H - y - s / 2:.2f}" width="{s}" height="{s}" fill="#000"/>')
+                parts.append(f'<circle cx="{x:.2f}" cy="{H - y:.2f}" r="{s / 2}" fill="#000"/>')
             q = cfg.qr_size_mm
-            qx = cfg.mark_inset_mm + s / 2 + marks.GAP_MM * 2
-            parts.append(f'<rect x="{qx:.2f}" y="{H - cfg.mark_inset_mm - q / 2:.2f}" width="{q}" height="{q}" '
+            qx, qy = marks.qr_position(cfg, W, H)
+            parts.append(f'<rect x="{qx:.2f}" y="{H - qy - q:.2f}" width="{q}" height="{q}" '
                          f'fill="none" stroke="#000" stroke-width="0.4" stroke-dasharray="1 1"/>')
-            parts.append(f'<text x="{qx + q + 2:.2f}" y="{H - cfg.mark_inset_mm + 1:.2f}" font-size="3" '
+            parts.append(f'<text x="{qx + q + 2:.2f}" y="{H - qy - q / 2 + 1:.2f}" font-size="3" '
                          f'font-family="sans-serif">QR {meta["id"]}</text>')
         for p in sheet_paths:
             d = "M" + " L".join(f"{x:.2f},{H - y:.2f}" for x, y in p)

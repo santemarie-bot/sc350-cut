@@ -77,7 +77,6 @@ class QRMode:
 
     def run(self):
         cfg = self.store.cfg
-        sheet = cutter.cfg_sheet(cfg)
         while self.on:
             try:
                 with cutter.Link(cfg) as link:
@@ -93,21 +92,19 @@ class QRMode:
                             self.status = "waiting for a sheet"
                             time.sleep(2)
                             continue
-                        self.say("feeding the sheet and reading the QR code")
-                        link.send("IN;" + cutter.feed_in(cfg, sheet))
+                        self.say("reading the QR code")
                         link.send("CMD:305,1;CMD:304;CMD:305,0;")
                         qr = link.expect("CMD:304,", cfg.qr_timeout)
-                        tail = "PU0,0;!PG;PU;" + cutter.feed_out(cfg, sheet) + "!PG;;"
                         hits = self.store.find(qr) if qr else []
                         meta = next((m for m in hits if m.get("status") == "queued"), hits[0] if hits else None)
                         if not meta or not (Path(meta["folder"]) / "cut.plt").exists():
-                            self.say(f"no job for QR '{qr}', sheet fed out" if qr else "no QR code read, sheet fed out")
-                            link.send(tail)
+                            self.say(f"no job for QR '{qr}', sheet fed through" if qr else "no QR code read, sheet fed through")
+                            link.send(cutter.EMPTY_JOB)
                             time.sleep(3)
                             continue
-                        body = cutter.strip_frame((Path(meta["folder"]) / "cut.plt").read_text())
+                        job = (Path(meta["folder"]) / "cut.plt").read_text().strip().lstrip("$").rstrip("#")
                         self.say(f"cutting {meta['id']}")
-                        link.send(body + tail)
+                        link.send(job)
                         result = link.expect("CMD:307,", 600)
                         self.done += 1
                         self.store.note(meta["id"], f"cut in QR mode ({result or 'no result reply'})",

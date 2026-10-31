@@ -64,7 +64,10 @@ def _convert(src: Path, workdir: Path, cut_filter=None) -> Path:
 
 
 def mark_centres(cfg, W=None, H=None):
-    W, H, i = W or cfg.sheet_width_mm, H or cfg.sheet_height_mm, cfg.mark_inset_mm
+    """Mark centres. mark_inset_mm is the gap from the sheet edge to the
+    mark's outer edge, as in SignCut ("5 mm marks, 10 mm from the edge")."""
+    W, H = W or cfg.sheet_width_mm, H or cfg.sheet_height_mm
+    i = cfg.mark_inset_mm + cfg.mark_size_mm / 2
     marks = [(i, i), (W - i, i), (i, H - i)]
     if cfg.mark_count >= 4:
         marks.append((W - i, H - i))
@@ -72,19 +75,25 @@ def mark_centres(cfg, W=None, H=None):
 
 
 def cut_origin(cfg, W=None, H=None):
-    """Where cut coordinate 0,0 is on the sheet. SignCut measures from the
-    outer corner of the bottom-left registration mark (TEST01.plt)."""
+    """Where cut coordinate 0,0 is on the sheet. SignCut's QR jobs count
+    from the centre of the first (bottom-left) mark."""
     x, y = mark_centres(cfg, W, H)[0]
-    if cfg.origin == "mark1":
-        return x - cfg.mark_size_mm / 2, y - cfg.mark_size_mm / 2
-    if cfg.origin == "mark1centre":
+    if cfg.origin in ("mark1", "mark1centre"):
         return x, y
+    if cfg.origin == "mark1corner":
+        return x - cfg.mark_size_mm / 2, y - cfg.mark_size_mm / 2
     return 0.0, 0.0
+
+
+def qr_position(cfg, W=None, H=None):
+    """Bottom-left corner of the QR code: next to mark 1 on the bottom edge."""
+    mx, my = mark_centres(cfg, W, H)[0]
+    return mx + cfg.mark_size_mm / 2 + GAP_MM * 2, my - cfg.qr_size_mm / 2
 
 
 def print_area(cfg, W=None, H=None):
     """Rectangle (x0, y0, x1, y1) in mm where artwork may go."""
-    i, s = cfg.mark_inset_mm, cfg.mark_size_mm
+    i, s = cfg.mark_inset_mm + cfg.mark_size_mm / 2, cfg.mark_size_mm
     side = i + s / 2 + GAP_MM
     bottom = i + max(s, cfg.qr_size_mm) / 2 + GAP_MM
     return side, bottom, (W or cfg.sheet_width_mm) - side, (H or cfg.sheet_height_mm) - side
@@ -96,18 +105,20 @@ def _overlay(cfg, job_id, qr_payload, path: Path, W_mm, H_mm):
     s = cfg.mark_size_mm
     c.setFillColorRGB(0, 0, 0)
     for x, y in mark_centres(cfg, W_mm, H_mm):
-        c.rect((x - s / 2) * mm, (y - s / 2) * mm, s * mm, s * mm, stroke=0, fill=1)
+        if cfg.mark_shape == "square":
+            c.rect((x - s / 2) * mm, (y - s / 2) * mm, s * mm, s * mm, stroke=0, fill=1)
+        else:
+            c.circle(x * mm, y * mm, s / 2 * mm, stroke=0, fill=1)
 
     q = cfg.qr_size_mm
-    qx = cfg.mark_inset_mm + s / 2 + GAP_MM * 2
-    qy = cfg.mark_inset_mm - q / 2
+    qx, qy = qr_position(cfg, W_mm, H_mm)
     w = QrCodeWidget(qr_payload, barLevel="M")
     x0, y0, x1, y1 = w.getBounds()
     d = Drawing(q * mm, q * mm, transform=[q * mm / (x1 - x0), 0, 0, q * mm / (y1 - y0), 0, 0])
     d.add(w)
     renderPDF.draw(d, c, qx * mm, qy * mm)
     c.setFont("Helvetica", 8)
-    c.drawString((qx + q + 2) * mm, (cfg.mark_inset_mm - 1) * mm, job_id)
+    c.drawString((qx + q + 2) * mm, (qy + q / 2 - 1) * mm, job_id)
     c.showPage()
     c.save()
 

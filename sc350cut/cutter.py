@@ -5,6 +5,13 @@ SignCut's Write-to-File output, see notes/signcut-protocol.md):
 
   IN;CMD:318,<len>,<wid>,200,200,1;PU;SP1; ...cuts... PU0,0;!PG;PU;CMD:319,<len>,<wid>,0;!PG;;
 
+That is the "Write to File" form. The QR-mode job files SignCut keeps in
+C:\\signcut\\<qr>.plt (notes/53061867.plt) are what we copy:
+
+  IN;CMD:318,<mark span x>,<y>,600,600,0;CMD:307,100,100,<x>,<y>;PU;SP1; ...cuts...
+  PU0,0;!PG;PU;CMD:319,<x+800>,<y>,0;!PG;;
+
+with cut coordinates counted from the centre of the first mark.
 CMD:318 feeds the sheet in and finds the marks, CMD:319 feeds it out.
 Units are 0.025 mm. The cutter answers on the same connection (CMD:100
 status, CMD:304 QR text, CMD:307 cut OK/NG), so the link is two-way.
@@ -65,14 +72,27 @@ def _units(mm, cfg):
     return round(mm * cfg.units_per_mm)
 
 
-def feed_in(cfg, sheet):
-    l, w = sheet
-    return f"CMD:318,{_units(l, cfg)},{_units(w, cfg)},{cfg.feed_params};"
+def feed_in(cfg, span):
+    """CMD:318 as in SignCut's QR job files: the distance from mark 1 to the
+    opposite mark along the feed (x) and across it (y), then feed_params.
+    CMD:307 follows with the same mark rectangle."""
+    sx, sy = (_units(v, cfg) for v in span)
+    return f"CMD:318,{sx},{sy},{cfg.feed_params};CMD:307,100,100,{sx},{sy};"
 
 
-def feed_out(cfg, sheet):
-    l, w = sheet
-    return f"CMD:319,{_units(l, cfg)},{_units(w, cfg)},0;"
+def feed_out(cfg, span):
+    sx, sy = (_units(v, cfg) for v in span)
+    return f"CMD:319,{sx + 800},{sy},0;"
+
+
+# what SignCut's spooler sends for a sheet with no job: feed it through
+EMPTY_JOB = "IN;CMD:318,-200,-200,600,600,0;PU;CMD:319,16600,-200,0;!PG;;"
+
+
+def mark_span(cfg, sheet):
+    """Mark 1 to the far mark, in mm, for a sheet in the cutter's frame."""
+    c = 2 * (cfg.mark_inset_mm + cfg.mark_size_mm / 2)
+    return sheet[0] - c, sheet[1] - c
 
 
 def cfg_sheet(cfg):
@@ -105,10 +125,10 @@ def cut_body(paths, cfg):
 def to_hpgl(paths, cfg, sheet=None):
     """One job as the cutter wants it. sheet = (x_mm, y_mm) in the cutter's
     frame: x runs along the feed (CMD:318 length), y across it (width)."""
-    sheet = sheet or cfg_sheet(cfg)
+    span = mark_span(cfg, sheet or cfg_sheet(cfg))
     body = cut_body(paths, cfg)
     if cfg.protocol == "signcut":
-        return f"IN;{feed_in(cfg, sheet)}{body}PU0,0;!PG;PU;{feed_out(cfg, sheet)}!PG;;"
+        return f"IN;{feed_in(cfg, span)}{body}PU0,0;!PG;PU;{feed_out(cfg, span)}!PG;;"
     pre, post = cfg.preamble.strip(), cfg.postamble.strip()
     return pre + body + post + "\n"
 
@@ -120,7 +140,7 @@ def strip_frame(data: str) -> str:
     keep = []
     for c in data.split(";"):
         c = c.strip()
-        if not c or c == "IN" or c.startswith(("CMD:318", "CMD:319", "!PG")):
+        if not c or c == "IN" or c.startswith(("CMD:318", "CMD:319", "CMD:307", "!PG")):
             continue
         keep.append(c + ";")
     return "".join(keep)
