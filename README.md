@@ -20,7 +20,7 @@ Files that can't be used go to `hotfolder/_rejected` with a `.txt` saying why.
 sudo ./deploy/install.sh
 ```
 
-Printing: the Xerox C60 aborts jobs that name no paper tray (error 024-747), so prints go out with `print_options = media=tray-1 print-color-mode=color` (A3 in Tray 1). Use `media=manual` for Tray 5 (bypass).
+Printing: the Xerox C60 aborts jobs that name no paper tray (error 024-747), so prints name a tray: the job page has a tray picker (Tray 5 bypass by default, for thick stock; Tray 1-3), and `print_options = media=manual print-color-mode=color` sets the default.
 
 Settings: `/etc/sc350cut.ini` (copied from `deploy/sc350cut.ini`). Set `printer =` to the Xerox CUPS queue name (`lpstat -p`). Restart with `sudo systemctl restart sc350cut`. Logs: `journalctl -u sc350cut -f`.
 

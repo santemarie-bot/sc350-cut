@@ -37,8 +37,9 @@ class Config:
     qr_size_mm: float = 12.0
     printer: str = ""                  # CUPS queue name of the Xerox, e.g. Xerox_C8000
     # lp -o options. The Xerox C60 aborts jobs that name no tray (error 024-747);
-    # media=manual is Tray 5 (bypass), media=tray-1 is Tray 1; both printed.
-    print_options: str = "media=tray-1 print-color-mode=color"
+    # media=manual is Tray 5 (bypass, for thick stock), media=tray-1 is Tray 1.
+    # The page offers both; this is the default.
+    print_options: str = "media=manual print-color-mode=color"
 
     # cutter
     cutter_device: str = "tcp://192.168.0.52:9100"   # or /dev/usb/lp0, /dev/ttyUSB0, cups:QueueName

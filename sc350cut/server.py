@@ -33,19 +33,27 @@ def worker(store: Store):
         time.sleep(1)
 
 
-def print_job(store, meta):
+TRAYS = {"5": "manual", "1": "tray-1", "2": "tray-2", "3": "tray-3", "4": "tray-4"}
+
+
+def print_job(store, meta, tray=None):
     cfg = store.cfg
     if not meta.get("printable"):
         raise RuntimeError("this job has no print sheet")
     opts = []
     for o in cfg.print_options.split():
+        if tray in TRAYS and o.startswith("media="):
+            o = "media=" + TRAYS[tray]
         opts += ["-o", o]
+    if tray in TRAYS and not any(o.startswith("media=") for o in opts):
+        opts += ["-o", "media=" + TRAYS[tray]]
     cmd = ["lp"] + (["-d", cfg.printer] if cfg.printer else []) + opts + \
         ["-t", meta["id"], str(Path(meta["folder"]) / "print.pdf")]
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     if r.returncode:
         raise RuntimeError(r.stderr.strip() or "lp failed")
-    store.note(meta["id"], f"sent to printer {cfg.printer or '(default)'}", prints=meta.get("prints", 0) + 1,
+    where = f"tray {tray}" if tray in TRAYS else "default tray"
+    store.note(meta["id"], f"sent to printer {cfg.printer or '(default)'}, {where}", prints=meta.get("prints", 0) + 1,
                printed_at=now_iso())
     return r.stdout.strip()
 
@@ -151,7 +159,9 @@ def make_handler(store: Store, qr: "QRMode"):
                 for j in jobs:
                     j.pop("folder", None)
                     j["qr"] = store.qr_text(j["id"])
-                return self._send(200, {"jobs": jobs, "queue_hours": store.cfg.queue_hours,
+                media = next((o[6:] for o in store.cfg.print_options.split() if o.startswith("media=")), "")
+                default_tray = next((k for k, v in TRAYS.items() if v == media), "")
+                return self._send(200, {"jobs": jobs, "queue_hours": store.cfg.queue_hours, "tray": default_tray,
                                         "hotfolder": str(store.cfg.hotfolder),
                                         "qr_mode": {"on": qr.on, "status": qr.status, "done": qr.done}})
             if parts == ["api", "find"]:
@@ -202,7 +212,7 @@ def make_handler(store: Store, qr: "QRMode"):
                     return self._send(409, {"confirm": f"{jid} was already {'printed' if action == 'print' else 'cut'} "
                                                        f"at {meta[again][11:16]} on {meta[again][:10]}. Do it again?"})
                 if action == "print":
-                    msg = print_job(store, meta)
+                    msg = print_job(store, meta, str(body.get("tray") or "") or None)
                 elif action == "cut":
                     msg = cut_job(store, meta)
                 elif action == "mark":
