@@ -102,7 +102,8 @@ class Store:
 
     def find(self, text):
         """Look a job up by what a QR scan or a search box gives us."""
-        text = text.strip()
+        # "#n" after the job ID marks a test copy of the code (QR position test)
+        text = text.strip().split("#")[0].strip()
         if not text:
             return []
         with self.lock:
