@@ -32,9 +32,11 @@ measured from the outer corner of the bottom-left mark), then `CMD:319,...` feed
 Portrait sheets are turned so the long side runs along the feed.
 
 **QR mode** (button at the top of the page): the server keeps a connection to the cutter, waits for a sheet
-(`CMD:320`), feeds it in, asks the camera for the QR code (`CMD:304`), sends the matching job's cut lines,
-and feeds the sheet out, then carries on with the next sheet until the feed tray is empty or you
+(`CMD:320`), feeds it in and finds the 4 marks (`CMD:318` + `CMD:307`), moves the camera over the QR
+code (centre between the leading marks plus the camera offset from `CMD:122`), reads it (`CMD:304`), sends
+the matching job's cut lines and feeds the sheet out, then carries on with the next sheet until the feed tray is empty or you
 switch it off. A sheet with no QR code, or one that matches no job, is fed straight through.
+`python3 -u -m sc350cut --config /etc/sc350cut.ini qrprobe` (QR mode off) tests the feed/QR steps without cutting.
 Pause finishes the current sheet and waits. Every command and reply is logged
 (`journalctl -u sc350cut -f`). QR mode is off after a restart of the service.
 
