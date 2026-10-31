@@ -153,9 +153,26 @@ class QRMode:
                             link.expect("CMD:319,", 60)
                             self._wait_idle(link)
                             continue
-                        job = (Path(meta["folder"]) / "cut.plt").read_text().strip().lstrip("$").rstrip("#")
+                        # the sheet is already in: skip the job's own CMD:318 (a second
+                        # feed answers NG) and find the marks with its CMD:307 first;
+                        # only send the cut lines once the cutter says the marks are OK
+                        job = cutter.after_feed((Path(meta["folder"]) / "cut.plt").read_text())
+                        reg, _, cuts = job.partition(";")
+                        if not reg.strip().startswith("CMD:307"):
+                            reg, cuts = "", job
+                        self.say(f"QR {qr} = {meta['id']} ({meta['name']}); finding the marks")
+                        if reg:
+                            link.send(reg + ";")
+                            found = link.expect("CMD:307,", cfg.qr_timeout)
+                            if found is None or not found.strip().upper().startswith("OK"):
+                                self.ejected += 1
+                                self.say(f"the cutter could not find the marks ({found or 'no answer'}), ejecting the sheet")
+                                link.send(eject)
+                                link.expect("CMD:319,", 60)
+                                self._wait_idle(link)
+                                continue
                         self.say(f"cutting {meta['id']} ({meta['name']})")
-                        link.send(job)
+                        link.send(cuts)
                         result = link.expect("CMD:319,", cfg.cut_timeout)
                         self._wait_idle(link)
                         self.done += 1
