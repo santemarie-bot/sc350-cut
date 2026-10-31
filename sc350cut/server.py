@@ -153,13 +153,20 @@ class QRMode:
                             link.expect("CMD:319,", 60)
                             self._wait_idle(link)
                             continue
-                        # the sheet is already in: skip the job's own CMD:318 (a second
-                        # feed answers NG) and find the marks with its CMD:307 first;
-                        # only send the cut lines once the cutter says the marks are OK
-                        job = cutter.after_feed((Path(meta["folder"]) / "cut.plt").read_text())
-                        reg, _, cuts = job.partition(";")
-                        if not reg.strip().startswith("CMD:307"):
-                            reg, cuts = "", job
+                        # the sheet is already in. Send the job's CMD:318 (mark spacing)
+                        # and CMD:307 without its IN; (IN; resets the cutter and the marks
+                        # answer NG; CMD:307 alone also answers NG). Tested with qrprobe
+                        # 2026-10-31: CMD:318+CMD:307 after the QR read -> CMD:307,OK.
+                        # Only send the cut lines once the cutter says the marks are OK.
+                        body = (Path(meta["folder"]) / "cut.plt").read_text().strip().lstrip("$").rstrip("#")
+                        parts = [c for c in body.split(";")]
+                        while parts and parts[0].strip() == "IN":
+                            parts.pop(0)
+                        head = []
+                        while parts and parts[0].strip().startswith(("CMD:318", "CMD:307")):
+                            head.append(parts.pop(0))
+                        reg = ";".join(head)
+                        cuts = ";".join(parts)
                         self.say(f"QR {qr} = {meta['id']} ({meta['name']}); finding the marks")
                         if reg:
                             link.send(reg + ";")
