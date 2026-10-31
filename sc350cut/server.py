@@ -125,16 +125,18 @@ class QRMode:
                             time.sleep(2)
                             continue
                         empty_since = None
-                        # feed the sheet in and find the marks first, as SignCut's
-                        # spooler does; only then can the camera see the QR code
-                        span = cutter.mark_span(cfg, cutter.cfg_sheet(cfg))
-                        eject = "PU0,0;!PG;PU;" + cutter.feed_out(cfg, span) + "!PG;;"
-                        self.say("feeding the sheet in and finding the marks")
-                        link.send("IN;" + cutter.feed_in(cfg, span, registration=False))
+                        # feed the sheet in without a job, as SignCut's spooler does;
+                        # this leaves the camera over the QR code (a feed that finds
+                        # the marks first leaves it elsewhere: NOQRCODE). The job file
+                        # sent after the read starts with its own CMD:318, which finds
+                        # the marks on the sheet that is already in.
+                        eject = "PU;" + cfg.qr_eject + "!PG;;"
+                        self.say("feeding the sheet in")
+                        link.send(f"IN;CMD:318,{cfg.qr_feed};")
                         fed = link.expect("CMD:318,", cfg.qr_timeout)
                         if fed is None or not fed.strip().upper().startswith("OK"):
                             self.ejected += 1
-                            self.say(f"the cutter could not feed the sheet or find its marks ({fed or 'no answer'}), ejecting it")
+                            self.say(f"the cutter could not feed the sheet ({fed or 'no answer'}), ejecting it")
                             link.send(eject)
                             link.expect("CMD:319,", 60)
                             self._wait_idle(link)
@@ -151,7 +153,7 @@ class QRMode:
                             link.expect("CMD:319,", 60)
                             self._wait_idle(link)
                             continue
-                        job = cutter.after_feed((Path(meta["folder"]) / "cut.plt").read_text())
+                        job = (Path(meta["folder"]) / "cut.plt").read_text().strip().lstrip("$").rstrip("#")
                         self.say(f"cutting {meta['id']} ({meta['name']})")
                         link.send(job)
                         result = link.expect("CMD:319,", cfg.cut_timeout)

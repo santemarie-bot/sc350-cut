@@ -48,6 +48,8 @@ class Config:
     feed_params: str = "600,600,0"     # last three CMD:318 values, as in SignCut's QR job files
     cut_timeout: float = 300.0         # QR mode: seconds to wait for a sheet's cut result
     cutter_trace: bool = True          # log every command and reply in QR mode (journalctl -u sc350cut)
+    qr_feed: str = "-200,-200,600,600,0"   # QR mode: CMD:318 that feeds a sheet before its QR is read (SignCut's no-job feed; tested 2026-10-31)
+    qr_eject: str = "CMD:319,16600,-200,0;"  # QR mode: feed out a sheet that has no job
     qr_timeout: float = 60.0           # QR mode: seconds to wait for the cutter to read a QR code
     units_per_mm: float = 40.0
     speed: int = 0                     # VS value, 0 = leave cutter default
