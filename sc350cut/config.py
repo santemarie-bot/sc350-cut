@@ -20,7 +20,7 @@ class Config:
 
     # jobs
     job_prefix: str = "ALT"
-    qr_text: str = "{job_id}"          # what the QR code holds
+    qr_text: str = "{job_num}"         # what the QR code holds; {job_num} = the job ID's digits (261031003), {job_id} = ALT-261031-003
     reuse_by_filename: bool = True     # same file name again = same job, new revision
 
     # which lines in the artwork are cut lines
@@ -34,7 +34,7 @@ class Config:
     mark_inset_mm: float = 10.0        # sheet edge to the mark's outer edge
     mark_shape: str = "dot"            # dot (SignCut Vulcan) or square
     mark_count: int = 4                # 3 or 4 corner marks
-    qr_size_mm: float = 12.0
+    qr_size_mm: float = 10.0
     printer: str = ""                  # CUPS queue name of the Xerox, e.g. Xerox_C8000
     # lp -o options. The Xerox C60 aborts jobs that name no tray (error 024-747);
     # media=manual is Tray 5 (bypass, for thick stock), media=tray-1 is Tray 1.
@@ -90,4 +90,15 @@ def load(path=DEFAULT_PATH) -> Config:
             else:
                 val = raw
             setattr(cfg, key, val)
+    # Older installs wrote these into /etc/sc350cut.ini. The SC-350 camera only
+    # read SignCut's small number-only code, so move off the old defaults.
+    if cfg.qr_text == "{job_id}":
+        cfg.qr_text = "{job_num}"
+    if cfg.qr_size_mm == 12.0:
+        cfg.qr_size_mm = 10.0
     return cfg
+
+
+def qr_text(cfg, job_id):
+    num = "".join(ch for ch in job_id if ch.isdigit())
+    return cfg.qr_text.format(job_id=job_id, job_num=num)

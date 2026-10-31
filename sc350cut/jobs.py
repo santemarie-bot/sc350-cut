@@ -15,9 +15,14 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from . import cutter, geometry, marks
+from . import config, cutter, geometry, marks
 
 STABLE_SECONDS = 3       # a hot folder file must stop growing this long
+
+
+# Bumped when the print sheet layout changes; queued jobs made with an older
+# layout get a new print.pdf when the service starts or the job is reused.
+LAYOUT = "qr-centre-numeric-1"
 
 
 def now_iso():
@@ -60,7 +65,8 @@ class Store:
         self.rejected.mkdir(exist_ok=True)
         self.jobs = {}      # id -> folder
         self.rescan()
-        self._seen = {}     # hot folder path -> (size, mtime, first_seen)
+        self._seen = {}
+        self.refresh_layout()     # hot folder path -> (size, mtime, first_seen)
 
     # ------------------------------------------------------------------ index
 
@@ -74,6 +80,26 @@ class Store:
                         self.jobs[jid] = j.parent
                     except (ValueError, KeyError, OSError):
                         continue
+
+    def refresh_layout(self):
+        """Remake the print sheet of queued jobs laid out by an older version."""
+        for jid, folder in list(self.jobs.items()):
+            if self.cfg.queue in folder.parents:
+                self._refresh(jid)
+
+    def _refresh(self, jid):
+        meta = self.load(jid)
+        if not meta or not meta.get("printable") or meta.get("layout") == LAYOUT:
+            return
+        old = self.cfg.plt_export / f"{meta.get('qr') or jid}.plt"
+        self.log(f"{jid}: new print sheet layout, remaking print.pdf (print it again)")
+        meta = self.prepare(jid)
+        if not meta.get("error") and meta.get("printed_at"):
+            meta.update(printed_at="", cut_at="")
+            meta.setdefault("history", []).append([now_iso(), "new print sheet layout, needs printing again"])
+            self.save(meta)
+        if old.name != f"{self.qr_text(jid)}.plt":
+            old.unlink(missing_ok=True)
 
     def load(self, jid):
         folder = self.jobs.get(jid)
@@ -119,7 +145,7 @@ class Store:
             return hits
 
     def qr_text(self, jid):
-        return self.cfg.qr_text.format(job_id=jid)
+        return config.qr_text(self.cfg, jid)
 
     def _new_id(self):
         day = datetime.now().strftime("%y%m%d")
@@ -253,7 +279,7 @@ class Store:
             (folder / "cut.plt").write_text(plt)
             cutter.export(plt, cfg.plt_export, self.qr_text(jid))
             (folder / "preview.svg").write_text(self.preview_svg(meta, sheet_paths, folder / "print.pdf"))
-            meta.update(error="", note=note, size_mm=[round(aw, 1), round(ah, 1)],
+            meta.update(error="", note=note, layout=LAYOUT, qr=self.qr_text(jid), size_mm=[round(aw, 1), round(ah, 1)],
                         cut_paths=len(paths),
                         cut_length_mm=round(sum(sum(((p[i][0] - p[i - 1][0]) ** 2 + (p[i][1] - p[i - 1][1]) ** 2) ** .5
                                                     for i in range(1, len(p))) for p in paths)))
@@ -308,6 +334,8 @@ class Store:
             if not meta:
                 raise KeyError(jid)
             self._move_to_queue(meta)
+            self._refresh(jid)
+            meta = self.load(jid)
             # a new order: clear the printed / cut ticks of the last one
             meta.update(status="queued", queued_at=now_iso(), printed_at="", cut_at="")
             meta["history"].append([now_iso(), why])

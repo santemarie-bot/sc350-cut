@@ -16,7 +16,7 @@ from reportlab.graphics.shapes import Drawing
 from reportlab.lib.units import mm
 from reportlab.pdfgen import canvas
 
-from . import strip
+from . import config, strip
 from .geometry import ArtworkError
 
 GAP_MM = 3.0
@@ -86,26 +86,21 @@ def cut_origin(cfg, W=None, H=None):
 
 
 def qr_position(cfg, W=None, H=None):
-    """Bottom-left corner of the QR code, on the bottom edge beside the mark
-    the cutter starts from (as SignCut's plugin does): the bottom-right mark
-    on a portrait sheet that goes in turned, else the bottom-left one."""
+    """Bottom-left corner of the QR code. Measured from a SignCut plugin
+    sheet the SC-350 read: centred between the two bottom marks, on their
+    centre line."""
     W, H = W or cfg.sheet_width_mm, H or cfg.sheet_height_mm
-    centres = mark_centres(cfg, W, H)
-    gap = cfg.mark_size_mm / 2 + GAP_MM * 2
-    if W < H and cfg.rotate_portrait:
-        mx, my = centres[1]
-        return mx - gap - cfg.qr_size_mm, my - cfg.qr_size_mm / 2
-    mx, my = centres[0]
-    return mx + gap, my - cfg.qr_size_mm / 2
+    (x0, y0), (x1, _) = mark_centres(cfg, W, H)[:2]
+    q = cfg.qr_size_mm
+    return (x0 + x1) / 2 - q / 2, y0 - q / 2
 
 
 def qr_label_x(cfg, job_id, W=None, H=None):
-    """Where the job ID text starts: beside the QR, away from the mark."""
+    """Where the job ID text starts: right-aligned, ending left of the
+    bottom-right mark (as the plugin prints the file name)."""
     W, H = W or cfg.sheet_width_mm, H or cfg.sheet_height_mm
-    qx, _ = qr_position(cfg, W, H)
-    if W < H and cfg.rotate_portrait:
-        return qx - 2 - len(job_id) * 1.9
-    return qx + cfg.qr_size_mm + 2
+    mx, _ = mark_centres(cfg, W, H)[1]
+    return mx - cfg.mark_size_mm / 2 - 3 - len(job_id) * 1.9
 
 
 def print_area(cfg, W=None, H=None):
@@ -129,7 +124,7 @@ def _overlay(cfg, job_id, qr_payload, path: Path, W_mm, H_mm):
 
     q = cfg.qr_size_mm
     qx, qy = qr_position(cfg, W_mm, H_mm)
-    w = QrCodeWidget(qr_payload, barLevel="M", barBorder=0)  # qr_size_mm = the code itself; the sheet around it is the white margin
+    w = QrCodeWidget(qr_payload, barLevel="H", barBorder=0)  # qr_size_mm = the code itself; the sheet around it is the white margin
     x0, y0, x1, y1 = w.getBounds()
     d = Drawing(q * mm, q * mm, transform=[q * mm / (x1 - x0), 0, 0, q * mm / (y1 - y0), 0, 0])
     d.add(w)
@@ -168,7 +163,7 @@ def build_print_sheet(cfg, job_id, art_pdf: Path, out_pdf: Path):
 
     with tempfile.TemporaryDirectory() as td:
         ov_path = Path(td) / "overlay.pdf"
-        payload = cfg.qr_text.format(job_id=job_id)
+        payload = config.qr_text(cfg, job_id)
         _overlay(cfg, job_id, payload, ov_path, W, H)
         overlay = PdfReader(str(ov_path)).pages[0]
 

@@ -5,7 +5,7 @@ Replaces SignCut Pro + spooler in the Windows VM for the Vulcan SC-350 sheet cut
 ## What it does
 
 1. **Hot folder** (`/srv/cut/hotfolder`): drop artwork (PDF, AI, SVG, EPS, or a ready PLT). It's picked up within a few seconds.
-2. **Job + QR**: each new artwork gets a job ID such as `ALT-261028-001`. The software lays it on the print sheet with 4 registration marks (5 mm, 10 mm from the edge, same as SignCut's Vulcan defaults) and a QR code holding the job ID, and saves `print.pdf`. The cut lines are taken out of `print.pdf`, so the Xerox prints only the artwork, marks and QR code.
+2. **Job + QR**: each new artwork gets a job ID such as `ALT-261028-001`. The software lays it on the print sheet with 4 registration marks (5 mm, 10 mm from the edge, same as SignCut's Vulcan defaults) and a 10 mm QR code centred between the two bottom marks (as the SignCut plugin places it) holding the job ID's digits (e.g. `261028001`), and saves `print.pdf`. The cut lines are taken out of `print.pdf`, so the Xerox prints only the artwork, marks and QR code.
 3. **Cut file**: the CutContour line (by layer/name, or magenta stroke) becomes `cut.plt` (HP-GL), measured from registration mark 1. A copy named by the QR text goes to `/srv/cut/plt`.
 4. **Active cut queue** (web page on port 8350): shows each job with a preview, Print (sends print.pdf to the Xerox through CUPS), Cut (sends to the cutter at 192.168.0.52), and the time left.
 5. **Printed / cut ticks**: each job shows ✓ printed and ✓ cut once done (ticked automatically, or by hand on the job page). Done jobs drop to the bottom of the queue, and printing or cutting a job again asks first. A repeat order clears the ticks.
@@ -44,7 +44,6 @@ Pause finishes the current sheet and waits. Every command and reply is logged
 
 - Which TCP port the cutter answers on (9100 or 9200). Test with
   `python3 -m sc350cut --config /etc/sc350cut.ini talk 'CMD:100;'` and add `--port 9200` to try the other one.
-- Whether the camera finds our square marks and QR code where we print them, or needs SignCut's layout.
 
 ## Command line
 
