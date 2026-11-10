@@ -9,7 +9,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
-from . import cutter
+from . import cupsjob, cutter
 from .jobs import Store, now_iso
 
 UI = Path(__file__).with_name("ui.html")
@@ -25,12 +25,39 @@ def worker(store: Store):
     while True:
         try:
             store.poll_hotfolder()
+            watch_prints(store)
             if time.time() - last_archive > 60:
                 store.archive_due()
                 last_archive = time.time()
         except Exception:
             log(traceback.format_exc())
         time.sleep(1)
+
+
+_last_watch = [0.0]
+
+
+def watch_prints(store, every=5):
+    """Mark a job printed only once CUPS says its print job completed."""
+    if time.time() - _last_watch[0] < every:
+        return
+    _last_watch[0] = time.time()
+    for m in store.all():
+        if not m or m.get("print_state") != "sent" or not m.get("cups_job"):
+            continue
+        st, msg = cupsjob.job_state(m["cups_job"])
+        if st is None:
+            continue  # CUPS not answering; ask again next time
+        if st in cupsjob.DONE_OK:
+            store.note(m["id"], f"printer finished CUPS job {m['cups_job']}",
+                       print_state="done", print_msg="", printed_at=now_iso(), sheets_cut=0, cut_at="")
+            log(f"{m['id']}: CUPS job {m['cups_job']} completed")
+        elif st in cupsjob.DONE_BAD:
+            store.note(m["id"], f"print FAILED, CUPS job {m['cups_job']} {msg}",
+                       print_state="failed", print_msg=f"Print failed ({msg}). Check the Xerox and print again.")
+            log(f"{m['id']}: CUPS job {m['cups_job']} {msg}")
+        elif msg != m.get("print_msg"):
+            store.note(m["id"], f"CUPS job {m['cups_job']} {msg}", print_msg=msg)
 
 
 TRAYS = {"5": "manual", "1": "tray-1", "2": "tray-2", "3": "tray-3", "4": "tray-4"}
@@ -61,9 +88,16 @@ def print_job(store, meta, tray=None):
     if r.returncode:
         raise RuntimeError(r.stderr.strip() or "lp failed")
     where = f"tray {tray}" if tray in TRAYS else "default tray"
-    store.note(meta["id"], f"sent {n} {'copy' if n == 1 else 'copies'} to printer {cfg.printer or '(default)'}, {where}",
-               prints=meta.get("prints", 0) + n, printed_at=now_iso(), sheets_cut=0, cut_at="")
-    return r.stdout.strip()
+    jobno = cupsjob.job_id_from_lp(r.stdout)
+    sent = f"sent {n} {'copy' if n == 1 else 'copies'} to printer {cfg.printer or '(default)'}, {where}"
+    if jobno is None:  # can't follow it in CUPS: trust lp, as before
+        store.note(meta["id"], sent, prints=meta.get("prints", 0) + n, printed_at=now_iso(),
+                   sheets_cut=0, cut_at="", print_state="", print_msg="")
+        return r.stdout.strip()
+    # lp only means CUPS queued it: printed is ticked when CUPS says the job completed
+    store.note(meta["id"], f"{sent}, CUPS job {jobno}", prints=meta.get("prints", 0) + n, printed_at="",
+               sheets_cut=0, cut_at="", cups_job=jobno, print_state="sent", print_msg="waiting for the printer")
+    return f"{r.stdout.strip()} (ticked printed once the Xerox has printed it)"
 
 
 def cut_job(store, meta):
@@ -305,7 +339,7 @@ def make_handler(store: Store, qr: "QRMode"):
                         m = store.load(jid)
                         if not m or m.get("error") or not m.get("printable"):
                             failed.append(jid); continue
-                        if m.get("printed_at") and not body.get("again"):
+                        if (m.get("printed_at") or m.get("print_state") == "sent") and not body.get("again"):
                             skipped.append(jid); continue
                         try:
                             print_job(store, m, str(body.get("tray") or "") or None)
@@ -337,6 +371,8 @@ def make_handler(store: Store, qr: "QRMode"):
                     field = {"printed": "printed_at", "cut": "cut_at"}[body.get("what")]
                     on = bool(body.get("on"))
                     extra = {"sheets_cut": copies_of(meta) if on else 0} if field == "cut_at" else {}
+                    if field == "printed_at":
+                        extra = {"print_state": "", "print_msg": ""}
                     store.note(jid, f"marked {'as' if on else 'not'} {body['what']} by hand", **{field: now_iso() if on else ""}, **extra)
                     msg = f"marked {'' if on else 'not '}{body['what']}"
                 elif action == "requeue":
