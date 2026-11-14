@@ -10,7 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
-from . import cutter
+from . import cutter, printer
 from .jobs import Store, now_iso
 
 UI = Path(__file__).with_name("ui.html")
@@ -80,6 +80,9 @@ def print_job(store, meta, tray=None, copies=None):
         raise RuntimeError(f"copies must be 1-{MAX_COPIES}")
     if not meta.get("printable"):
         raise RuntimeError("this job has no print sheet")
+    online, _host, why = printer.check(cfg.printer, max_age=0)
+    if not online:                                       # do not queue it in CUPS: it would print later, unasked
+        raise RuntimeError(why)
     opts = []
     for o in cfg.print_options.split():
         if tray in TRAYS and o.startswith("media="):
@@ -294,7 +297,9 @@ def make_handler(store: Store, qr: "QRMode"):
                     j["printed_sheets"] = printed_sheets(j)
                 media = next((o[6:] for o in store.cfg.print_options.split() if o.startswith("media=")), "")
                 default_tray = next((k for k, v in TRAYS.items() if v == media), "")
-                return self._send(200, {"jobs": jobs, "queue_hours": store.cfg.queue_hours, "tray": default_tray,
+                online, host, why = printer.check(store.cfg.printer)
+                return self._send(200, {"printer": {"online": online, "host": host, "message": why},
+                                        "jobs": jobs, "queue_hours": store.cfg.queue_hours, "tray": default_tray,
                                         "hotfolder": str(store.cfg.hotfolder),
                                         "qr_mode": {"on": qr.on, "paused": qr.paused, "status": qr.status, "done": qr.done}})
             if parts == ["api", "find"]:

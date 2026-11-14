@@ -59,6 +59,7 @@
   <nav><button id="tQueue" class="on">Active queue</button><button id="tArchive">Archive</button></nav>
   <button id="qr" title="Cutter feeds each sheet, reads its QR code and cuts the matching job">QR mode: off</button>
   <button id="qrp" style="display:none">Pause</button>
+  <span id="xerox" class="tag err" style="display:none"></span>
   <span id="qrs" style="color:var(--mute);font-size:13px"></span>
   <input id="scan" placeholder="Scan a QR code or search job, file name, customer" autocomplete="off">
 </header>
@@ -89,6 +90,8 @@ function left(j) {
 }
 async function load() {
   const r = await fetch("api/jobs"); const d = await r.json();
+  const px = $("#xerox"), pr = d.printer || {online: true};
+  px.style.display = pr.online ? "none" : ""; px.textContent = pr.online ? "" : "Xerox offline"; px.title = pr.message || "";
   jobs = d.jobs; queueHours = d.queue_hours;
   try { tray = localStorage.getItem("tray") || d.tray; } catch (e) { tray = tray || d.tray; } $("#hf").textContent = d.hotfolder;
   qrOn = d.qr_mode.on; $("#qr").textContent = "QR mode: " + (qrOn ? "on" : "off"); $("#qr").classList.toggle("on", qrOn);
