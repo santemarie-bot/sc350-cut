@@ -107,7 +107,7 @@ function render() {
     <div class="job ${j.id === sel ? "sel" : ""} ${done(j) ? "isdone" : ""}" data-id="${esc(j.id)}">
       ${j.status === "queued" && j.printable && !j.error ? `<input type="checkbox" class="pick" data-pick="${esc(j.id)}" ${picked.has(j.id) ? "checked" : ""}>` : ""}<span class="id">${esc(j.id)}</span>
       ${j.error ? '<span class="tag err">problem</span>' : done(j) ? '<span class="tag done">✓ done</span>'
-        : `${j.note ? '<span class="tag warn">check</span>' : ""}<span class="tag ${j.printed_at ? "ok" : "todo"}">${j.printed_at ? "✓" : "○"} printed</span><span class="tag ${j.cut_at ? "ok" : "todo"}">${j.cut_at ? "✓" : "○"} cut</span>`}
+        : `${j.note ? '<span class="tag warn">check</span>' : ""}${j.print_state === "sent" && !j.printed_at ? '<span class="tag warn">… printing</span>' : j.print_state === "failed" && !j.printed_at ? '<span class="tag err">print failed</span>' : `<span class="tag ${j.printed_at ? "ok" : "todo"}">${j.printed_at ? "✓" : "○"} printed</span>`}<span class="tag ${j.cut_at ? "ok" : "todo"}">${j.cut_at ? "✓" : "○"} cut</span>`}
       ${j.status === "archived" && f ? '<span class="tag">archived</span>' : ""}
       <div>${esc(j.name)}${j.customer ? " · " + esc(j.customer) : ""}</div>
       ${j.status === "queued" && j.printable && !j.error ? `<div class="cp">Copies <input type="number" min="1" max="999" class="copies" data-copies="${esc(j.id)}" value="${copies(j)}">
@@ -133,6 +133,7 @@ function detail() {
     <h2>${esc(j.id)}</h2><div>${esc(j.name)}</div>
     ${j.error ? `<p class="tag err" style="display:block;padding:8px">${esc(j.error)}</p>` : ""}
     ${j.note ? `<p class="tag warn" style="display:block;padding:8px">${esc(j.note)}</p>` : ""}
+    ${j.print_msg && !j.printed_at ? `<p class="tag ${j.print_state === "failed" ? "err" : "warn"}" style="display:block;padding:8px">${esc(j.print_msg)}</p>` : ""}
     <div class="ticks">
       <label><input type="checkbox" data-mark="printed" ${j.printed_at ? "checked" : ""}> Printed${j.printed_at ? " " + esc(j.printed_at.slice(11, 16)) : ""}</label>
       <label><input type="checkbox" data-mark="cut" ${j.cut_at ? "checked" : ""}> Cut${j.cut_at ? " " + esc(j.cut_at.slice(11, 16)) : ""}</label>
