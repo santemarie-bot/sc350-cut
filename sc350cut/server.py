@@ -91,7 +91,8 @@ def printed_sheets(meta):
     """Sheets printed so far: the print log (not counting prints CUPS failed), or (jobs printed before the log
     existed) the history lines."""
     if meta.get("print_log"):
-        return sum(int(p.get("copies") or 1) for p in meta["print_log"] if not p.get("failed"))
+        return sum(int(p["copies"]) if p.get("copies") is not None else 1
+                   for p in meta["print_log"] if not p.get("failed"))
     n = 0
     for _, text in meta.get("history") or []:
         m = _PRINTED_NOTE.match(text or "")
