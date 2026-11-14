@@ -111,7 +111,19 @@ def print_area(cfg, W=None, H=None):
     return side, bottom, (W or cfg.sheet_width_mm) - side, (H or cfg.sheet_height_mm) - side
 
 
-def _overlay(cfg, job_id, qr_payload, path: Path, W_mm, H_mm):
+def customer_label(text):
+    """Customer text printed next to the QR: one line, Helvetica-safe characters, at most 40."""
+    t = " ".join(str(text or "").split())[:40]
+    return t.encode("latin-1", "replace").decode("latin-1")
+
+
+def customer_label_right(cfg, W=None, H=None):
+    """The customer text ends 3 mm left of the QR code (right-aligned there)."""
+    qx, _ = qr_position(cfg, W, H)
+    return qx - 3
+
+
+def _overlay(cfg, job_id, qr_payload, path: Path, W_mm, H_mm, customer=""):
     W, H = W_mm * mm, H_mm * mm
     c = canvas.Canvas(str(path), pagesize=(W, H))
     s = cfg.mark_size_mm
@@ -131,11 +143,15 @@ def _overlay(cfg, job_id, qr_payload, path: Path, W_mm, H_mm):
     renderPDF.draw(d, c, qx * mm, qy * mm)
     c.setFont("Helvetica", 8)
     c.drawString(qr_label_x(cfg, job_id, W_mm, H_mm) * mm, (qy + q / 2 - 1) * mm, job_id)
+    label = customer_label(customer)
+    if label:
+        c.setFont("Helvetica", 7)
+        c.drawRightString(customer_label_right(cfg, W_mm, H_mm) * mm, (qy + q / 2 - 1) * mm, label)
     c.showPage()
     c.save()
 
 
-def build_print_sheet(cfg, job_id, art_pdf: Path, out_pdf: Path):
+def build_print_sheet(cfg, job_id, art_pdf: Path, out_pdf: Path, customer=""):
     """Write out_pdf. Returns (offset_x_mm, offset_y_mm, sheet_w_mm, sheet_h_mm):
     where the artwork's bottom-left corner sits on the sheet, and the sheet size.
 
@@ -164,7 +180,7 @@ def build_print_sheet(cfg, job_id, art_pdf: Path, out_pdf: Path):
     with tempfile.TemporaryDirectory() as td:
         ov_path = Path(td) / "overlay.pdf"
         payload = config.qr_text(cfg, job_id)
-        _overlay(cfg, job_id, payload, ov_path, W, H)
+        _overlay(cfg, job_id, payload, ov_path, W, H, customer)
         overlay = PdfReader(str(ov_path)).pages[0]
 
         sheet = PageObject.create_blank_page(width=W * mm, height=H * mm)

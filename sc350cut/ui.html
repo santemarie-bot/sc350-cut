@@ -61,6 +61,7 @@
   <nav><button id="tQueue" class="on">Active queue</button><button id="tArchive">Archive</button></nav>
   <button id="qr" title="Cutter feeds each sheet, reads its QR code and cuts the matching job">QR mode: off</button>
   <button id="qrp" style="display:none">Pause</button>
+  <span id="xerox" class="tag err" style="display:none"></span>
   <span id="qrs" style="color:var(--mute);font-size:13px"></span>
   <input id="scan" placeholder="Scan a QR code or search job, file name, customer" autocomplete="off">
 </header>
@@ -78,6 +79,7 @@
 </main>
 <div id="toast"></div>
 <script>
+let copiesBox = {};   // job id -> what is typed in its Copies box (kept across the 5-second refresh)
 let picked = new Set(), qrPaused = false, tray = "", qrOn = false, jobs = [], tab = "queued", sel = null, queueHours = 24, filter = "";
 const $ = s => document.querySelector(s);
 const copies = j => Math.max(1, parseInt(j.copies) || 1);
@@ -91,6 +93,8 @@ function left(j) {
 }
 async function load() {
   const r = await fetch("api/jobs"); const d = await r.json();
+  const px = $("#xerox"), pr = d.printer || {online: true};
+  px.style.display = pr.online ? "none" : ""; px.textContent = pr.online ? "" : "Xerox offline"; px.title = pr.message || "";
   jobs = d.jobs; queueHours = d.queue_hours;
   try { tray = localStorage.getItem("tray") || d.tray; } catch (e) { tray = tray || d.tray; } $("#hf").textContent = d.hotfolder;
   qrOn = d.qr_mode.on; $("#qr").textContent = "QR mode: " + (qrOn ? "on" : "off"); $("#qr").classList.toggle("on", qrOn);
@@ -109,11 +113,11 @@ function render() {
       ${j.error ? '<span class="tag err">problem</span>' : done(j) ? '<span class="tag done">✓ done</span>'
         : `${j.note ? '<span class="tag warn">check</span>' : ""}${j.print_state === "sent" && !j.printed_at ? '<span class="tag warn">… printing</span>' : j.print_state === "failed" && !j.printed_at ? '<span class="tag err">print failed</span>' : `<span class="tag ${j.printed_at ? "ok" : "todo"}">${j.printed_at ? "✓" : "○"} printed</span>`}<span class="tag ${j.cut_at ? "ok" : "todo"}">${j.cut_at ? "✓" : "○"} cut</span>`}
       ${j.status === "archived" && f ? '<span class="tag">archived</span>' : ""}
-      <div>${esc(j.name)}${j.customer ? " · " + esc(j.customer) : ""}</div>
-      ${j.status === "queued" && j.printable && !j.error ? `<div class="cp">Copies <input type="number" min="1" max="999" class="copies" data-copies="${esc(j.id)}" value="${copies(j)}">
+      <div>${esc(j.name)}${j.customer ? " · " + esc(j.customer) : ""}${(j.copies || 1) > 1 ? " · <b>× " + j.copies + " copies</b>" : ""}</div>
+      ${j.status === "queued" && j.printable && !j.error ? `<div class="cp">Copies <input type="number" min="1" max="100" class="copies" data-copies="${esc(j.id)}" value="${copies(j)}">
         ${j.printed_at ? `· sheets cut ${j.sheets_cut || 0} of ${copies(j)}` : ""}</div>` : ""}
       <div class="meta">${j.status === "queued" ? left(j) : "archived " + esc((j.archived_at || "").slice(0, 10))}
-        · printed ${j.prints || 0} · cut ${j.cuts || 0}${j.revision > 1 ? " · rev " + j.revision : ""}</div>
+        · printed ${j.printed_sheets || 0} of ${j.copies || 1} · cut ${j.cuts || 0}${j.revision > 1 ? " · rev " + j.revision : ""}</div>
     </div>`).join("") : `<div class="empty">${f ? "No match." : tab === "queued" ? "Nothing in the queue." : "Archive is empty."}</div>`;
   document.querySelectorAll(".job").forEach(e => e.onclick = ev => { if (ev.target.dataset.pick || ev.target.dataset.copies) return; sel = e.dataset.id; render(); });
   document.querySelectorAll("[data-copies]").forEach(c => c.onchange = () => setCopies(c.dataset.copies, c.value));
@@ -139,13 +143,15 @@ function detail() {
       <label><input type="checkbox" data-mark="cut" ${j.cut_at ? "checked" : ""}> Cut${j.cut_at ? " " + esc(j.cut_at.slice(11, 16)) : ""}</label>
     </div>
     <div class="actions">
-      ${j.printable && !j.error ? `<label class="cp" style="margin:0">Copies <input type="number" min="1" max="999" class="copies" id="dcopies" value="${copies(j)}"></label>
+      ${j.printable && !j.error ? `<label class="cp" style="margin:0" title="The order's copies (also what Print sends and how many sheets QR mode cuts)">Order copies <input type="number" min="1" max="100" class="copies" id="dcopies" value="${copies(j)}"></label>
         <button data-a="print">Print with marks</button>
+        <label title="Copies to print now (the order is ${j.copies || 1}); e.g. 1 for a reprint">Print now
+          <input id="copies" type="number" min="1" max="100" value="${esc(String(copiesBox[j.id] ?? (j.copies || 1)))}" style="font:inherit;width:4.5em"></label>
+        <a href="${f}print.pdf" target="_blank">Print PDF</a>
         <select id="tray" title="Xerox paper tray">${[["5", "Tray 5 (bypass)"], ["1", "Tray 1"], ["2", "Tray 2"], ["3", "Tray 3"]]
           .map(([v, t]) => `<option value="${v}" ${v === tray ? "selected" : ""}>${t}</option>`).join("")}</select>` : ""}
       ${!j.error ? `<button class="primary" data-a="cut">Cut now</button>` : ""}
       ${j.status === "archived" ? `<button class="primary" data-a="requeue">Reuse: back to queue</button>` : `<button data-a="archive">Archive now</button>`}
-      ${j.printable && !j.error ? `<a href="${f}print.pdf" target="_blank">Print PDF</a>` : ""}
       ${!j.error ? `<a href="${f}cut.plt" download="${esc(j.qr)}.plt">PLT file</a>` : ""}
       <button data-a="rebuild">Rebuild</button>
       <button data-a="delete">Delete</button>
@@ -153,13 +159,16 @@ function detail() {
     ${!j.error ? `<div class="preview"><img src="${f}preview.svg?${Date.now()}" alt="Print sheet preview"></div>` : ""}
     <dl>
       <dt>QR code</dt><dd>${esc(j.qr)}</dd>
+      <dt>Printed</dt><dd>${j.printed_sheets || 0} of ${j.copies || 1} sheets${(j.print_log || []).length ? " (" + j.print_log.map(p => (p.copies || 1) + (p.reprint ? " reprint" : "")).join(" + ") + ")" : ""}</dd>
       <dt>Customer</dt><dd><input id="cust" value="${esc(j.customer)}" placeholder="optional" style="font:inherit;width:100%"></dd>
       <dt>Artwork</dt><dd>${j.size_mm ? j.size_mm.join(" × ") + " mm" : "-"}</dd>
       <dt>Cut lines</dt><dd>${j.cut_paths ?? "-"} shapes, ${j.cut_length_mm ? (j.cut_length_mm / 1000).toFixed(2) + " m" : "-"}</dd>
       <dt>Received</dt><dd>${esc((j.created || "").replace("T", " ").slice(0, 16))}</dd>
     </dl>
     <div class="hist">${(j.history || []).slice().reverse().map(h => `${esc(h[0].replace("T", " ").slice(0, 16))} ${esc(h[1])}`).join("<br>")}</div>`;
-  document.querySelectorAll("[data-a]").forEach(b => b.onclick = () => act(j.id, b.dataset.a, b.dataset.a === "print" ? {tray} : {}));
+  document.querySelectorAll("[data-a]").forEach(b => b.onclick = () => act(j.id, b.dataset.a, b.dataset.a === "print"
+    ? {tray, copies: parseInt(($("#copies") || {}).value, 10) || (j.copies || 1)} : {}));
+  if ($("#copies")) $("#copies").oninput = e => { copiesBox[j.id] = e.target.value; };
   if ($("#tray")) $("#tray").onchange = e => { tray = e.target.value; try { localStorage.setItem("tray", tray); } catch (_) {} };
   document.querySelectorAll("[data-mark]").forEach(c => c.onchange = () => act(j.id, "mark", {what: c.dataset.mark, on: c.checked}));
   $("#cust").onchange = e => act(j.id, "customer", {customer: e.target.value});
