@@ -10,7 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
-from . import cupsjob, cutter, printer
+from . import cupsjob, cutter, held, printer
 from .jobs import Store, now_iso
 
 UI = Path(__file__).with_name("ui.html")
@@ -27,6 +27,7 @@ def worker(store: Store):
         try:
             store.poll_hotfolder()
             watch_prints(store)
+            held.release_next(store, lambda meta, e: release_held(store, meta, e), log=log)
             if time.time() - last_archive > 60:
                 store.archive_due()
                 last_archive = time.time()
@@ -57,13 +58,11 @@ def watch_prints(store, every=5):
                 if not seen:
                     store.note(m["id"], f"CUPS says job {m['cups_job']} completed; waiting for the Xerox counter", cups_done_at=time.time())
                 elif time.time() - seen > 60:
-                    store.note(m["id"], f"CUPS job {m['cups_job']} completed but the Xerox counted no impression: unconfirmed",
-                               print_state="unconfirmed", print_msg="CUPS says completed but the Xerox counted no page. Check the "
-                               "output tray; print again if nothing came out, or tick Printed by hand.")
-                    log(f"{m['id']}: CUPS job {m['cups_job']} completed, Xerox counter unchanged")
+                    handle_no_page(store, m)
                 continue
             store.note(m["id"], f"printer finished CUPS job {m['cups_job']}",
-                       print_state="done", print_msg="", printed_at=now_iso(), sheets_cut=0, cut_at="", cups_done_at=0)
+                       print_state="done", print_msg="", printed_at=now_iso(), sheets_cut=0, cut_at="", cups_done_at=0,
+                       print_confirmed_at=now_iso(), print_confirmed_by="xerox-counter" if (before and now) else "cups")
             log(f"{m['id']}: CUPS job {m['cups_job']} completed")
         elif st in cupsjob.DONE_BAD:
             plog = [dict(p, failed=True) if p.get("cups_job") == m["cups_job"] else p for p in m.get("print_log") or []]
@@ -72,6 +71,54 @@ def watch_prints(store, every=5):
             log(f"{m['id']}: CUPS job {m['cups_job']} {msg}")
         elif msg != m.get("print_msg"):
             store.note(m["id"], f"CUPS job {m['cups_job']} {msg}", print_msg=msg)
+
+
+def escalate(store, jid, text):
+    """Needs the owner: one line in the escalation log (and the job's history)."""
+    try:
+        Path(store.cfg.escalation_log).parent.mkdir(parents=True, exist_ok=True)
+        with open(store.cfg.escalation_log, "a") as f:
+            f.write(f"{now_iso()} {jid} {text}\n")
+    except OSError:
+        pass
+    log(f"ESCALATE {jid}: {text}")
+
+
+def handle_no_page(store, m):
+    """CUPS said completed but the Xerox's counter did not move (both readings are positive evidence it did not print):
+    hold the job again so it prints once more when the Xerox is idle, up to held_max_retries times, then escalate.
+    The failed attempt is marked in the print log so it is not counted as a printed sheet."""
+    attempts = m.get("print_attempts") or 1
+    last = (m.get("print_log") or [{}])[-1]
+    plog = [dict(p, failed=True) if p.get("cups_job") == m.get("cups_job") else p for p in m.get("print_log") or []]
+    if attempts - 1 < store.cfg.held_max_retries:
+        p = held.hold(store.cfg, m["id"], last.get("tray"), last.get("copies") or 1,
+                      "CUPS completed but the Xerox counted no page", attempts=attempts)
+        store.note(m["id"], f"CUPS job {m['cups_job']} completed but the Xerox counted no page: held for retry "
+                            f"{attempts} of {store.cfg.held_max_retries}", print_state="held", print_log=plog,
+                   print_msg=f"Waiting for Xerox (nothing was counted; retry {attempts} of {store.cfg.held_max_retries})",
+                   printed_at="", cups_job=0, cups_done_at=0)
+        log(f"{m['id']}: no page counted, held for retry {attempts}" + ("" if p else " (already held)"))
+    else:
+        store.note(m["id"], f"CUPS job {m['cups_job']} completed but the Xerox counted no page, after {attempts} attempts: escalated",
+                   print_state="escalated", print_log=plog, printed_at="", cups_job=0, cups_done_at=0,
+                   print_msg=f"Printing failed {attempts} times (CUPS says completed, the Xerox counted nothing). Needs the owner.")
+        escalate(store, m["id"], f"print not confirmed after {attempts} attempts (CUPS completed, Xerox counter unchanged)")
+
+
+def release_held(store, meta, entry):
+    """Send one held job to CUPS (watcher). True if CUPS took it (state 'sent'); False leaves it held."""
+    print_job(store, meta, entry.get("tray") or None, entry.get("copies"), hold_entry=entry)
+    return (store.load(meta["id"]) or {}).get("print_state") == "sent"
+
+
+def hold_job(store, meta, tray, copies, why):
+    p = held.hold(store.cfg, meta["id"], tray, copies, why)
+    if p is None:
+        return "already waiting for the Xerox (it will not be queued twice)"
+    store.note(meta["id"], f"{why}: held in {Path(store.cfg.held_dir)}, {copies} cop{'y' if copies == 1 else 'ies'}, waiting for Xerox",
+               print_state="held", print_msg="Waiting for Xerox", printed_at="", held_at=now_iso())
+    return f"Waiting for Xerox: held, {copies} cop{'y' if copies == 1 else 'ies'} will print when it is back"
 
 
 TRAYS = {"5": "manual", "1": "tray-1", "2": "tray-2", "3": "tray-3", "4": "tray-4"}
@@ -113,7 +160,7 @@ def printed_sheets(meta):
     return n
 
 
-def print_job(store, meta, tray=None, copies=None):
+def print_job(store, meta, tray=None, copies=None, hold_entry=None):
     """copies: what the UI's Copies box says (e.g. 1 for a reprint); default = the order's copies (job_copies).
     The file name and the order's copies are never changed."""
     cfg = store.cfg
@@ -127,8 +174,10 @@ def print_job(store, meta, tray=None, copies=None):
     if not meta.get("printable"):
         raise RuntimeError("this job has no print sheet")
     online, _host, why = printer.check(cfg.printer, max_age=0)
-    if not online:                                       # do not queue it in CUPS: it would print later, unasked
-        raise RuntimeError(why)
+    if not online:                                       # never queue it in CUPS while the Xerox is off: hold it instead
+        if hold_entry is not None:
+            raise RuntimeError(why)                      # a release that found the Xerox gone: stays held
+        return hold_job(store, meta, tray, copies, why)
     opts = []
     for o in cfg.print_options.split():
         if tray in TRAYS and o.startswith("media="):
@@ -160,7 +209,8 @@ def print_job(store, meta, tray=None, copies=None):
     # lp only means CUPS queued it: printed is ticked when CUPS says the job completed
     store.note(meta["id"], f"{sent}, CUPS job {jobno}", prints=meta.get("prints", 0) + 1, printed_at="", print_log=log,
                sheets_cut=0, cut_at="", cups_job=jobno, print_state="sent", print_msg="waiting for the printer",
-               counters_before=cbefore, cups_done_at=0)
+               counters_before=cbefore, cups_done_at=0,
+               print_attempts=(hold_entry.get("attempts", 0) + 1) if hold_entry else 1, held_at="")
     return f"CUPS job {jobno}: {copies} cop{'y' if copies == 1 else 'ies'} queued (ticked printed once the Xerox has printed it)"
 
 
@@ -407,7 +457,7 @@ def make_handler(store: Store, qr: "QRMode"):
                         m = store.load(jid)
                         if not m or m.get("error") or not m.get("printable"):
                             failed.append(jid); continue
-                        if (m.get("printed_at") or m.get("print_state") == "sent") and not body.get("again"):
+                        if (m.get("printed_at") or m.get("print_state") in ("sent", "held")) and not body.get("again"):
                             skipped.append(jid); continue
                         try:
                             print_job(store, m, str(body.get("tray") or "") or None)
@@ -427,6 +477,9 @@ def make_handler(store: Store, qr: "QRMode"):
                 if not meta:
                     return self._send(404, {"error": f"no job {jid}"})
                 again = {"print": "printed_at", "cut": "cut_at"}.get(action)
+                if action == "print" and meta.get("print_state") in ("sent", "held") and not body.get("again"):
+                    return self._send(409, {"confirm": f"{jid} is already {'waiting for the Xerox' if meta['print_state'] == 'held' else 'in the printer queue'}. "
+                                                       "Send it again (a second print)?"})
                 if again and meta.get(again) and not body.get("again"):
                     # already done for this order: ask before doing it twice
                     return self._send(409, {"confirm": f"{jid} was already {'printed' if action == 'print' else 'cut'} "

@@ -18,6 +18,8 @@ cp -a /opt/sc350cut/sc350cut "/opt/sc350cut/sc350cut.bak-$ts"
 rm -rf /opt/sc350cut/sc350cut
 cp -r sc350cut /opt/sc350cut/
 find /opt/sc350cut/sc350cut -name __pycache__ -prune -exec rm -rf {} +
+install -d -o sc350cut -g sc350cut /srv/cut/held     # held print jobs (Xerox offline)
+touch /srv/cut/escalations.log && chown sc350cut:sc350cut /srv/cut/escalations.log
 systemctl restart sc350cut
 ok=
 for i in $(seq 1 30); do curl -sf http://127.0.0.1:8350/api/jobs >/dev/null && { ok=1; break; }; sleep 1; done

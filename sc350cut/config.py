@@ -41,6 +41,13 @@ class Config:
     # The page offers both; this is the default.
     print_options: str = "media=manual print-color-mode=color"
 
+    # held print jobs: the Xerox is offline -> the job waits in held_dir instead of going to CUPS
+    held_dir: Path = Path("/srv/cut/held")
+    held_watch_s: float = 30.0         # how often the Xerox is checked while jobs are held
+    held_warmup_s: float = 60.0        # the Xerox must have answered this long, and CUPS be idle, before a held job is released
+    held_max_retries: int = 3          # CUPS said completed but the Xerox counted no page: held again, this many times, then escalate
+    escalation_log: Path = Path("/srv/cut/escalations.log")
+
     # cutter
     cutter_device: str = "tcp://192.168.0.52:9100"   # or /dev/usb/lp0, /dev/ttyUSB0, cups:QueueName
     cutter_baud: int = 38400

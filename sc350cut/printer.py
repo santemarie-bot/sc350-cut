@@ -61,3 +61,12 @@ def counters(queue, timeout=4.0):
                 "large": int((pick("Large Impressions") or tot).group(1))}
     except Exception:
         return None
+
+
+def queue_idle(queue):
+    """True when CUPS shows the queue idle (no job being sent)."""
+    try:
+        out = subprocess.run(["lpstat", "-p"] + ([queue] if queue else []), capture_output=True, text=True, timeout=8).stdout
+        return " idle" in out and "now printing" not in out
+    except (OSError, subprocess.SubprocessError):
+        return False
