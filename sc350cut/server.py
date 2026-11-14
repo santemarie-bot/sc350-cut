@@ -69,8 +69,13 @@ def watch_prints(store, every=5):
             store.note(m["id"], f"print FAILED, CUPS job {m['cups_job']} {msg}", print_log=plog,
                        print_state="failed", print_msg=f"Print failed ({msg}). Check the Xerox and print again.")
             log(f"{m['id']}: CUPS job {m['cups_job']} {msg}")
-        elif msg != m.get("print_msg"):
-            store.note(m["id"], f"CUPS job {m['cups_job']} {msg}", print_msg=msg)
+        else:
+            if not printer.check(store.cfg.printer, max_age=0)[0]:
+                # the Xerox stopped answering while CUPS still says printing (seen twice on 2026-11-14, both times during an A3 job)
+                msg = ("the Xerox stopped answering while printing: check the output tray. CUPS reports 'completed' when it is back; "
+                       "the Xerox page counter then decides whether it printed")
+            if msg != m.get("print_msg"):
+                store.note(m["id"], f"CUPS job {m['cups_job']} {msg}", print_msg=msg)
 
 
 def escalate(store, jid, text):
