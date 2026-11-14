@@ -440,6 +440,11 @@ def make_handler(store: Store, qr: "QRMode"):
                     n = copies_of({"copies": body.get("copies")})
                     store.note(jid, f"copies set to {n}", copies=n)
                     msg = f"{n} {'copy' if n == 1 else 'copies'}"
+                elif action == "resetprinted":
+                    # a non-empty log (even 0 sheets) stops printed_sheets() reading the old history lines
+                    store.note(jid, "printed count reset to 0", printed_at="", print_state="", print_msg="",
+                               print_log=[{"at": now_iso(), "copies": 0, "note": "printed count reset"}])
+                    msg = "printed count reset to 0"
                 elif action == "customer":
                     cust = str(body.get("customer", ""))[:200]
                     store.note(jid, f"customer set: {cust}" if cust else "customer cleared", customer=cust)
