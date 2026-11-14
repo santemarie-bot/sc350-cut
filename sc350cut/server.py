@@ -112,6 +112,20 @@ def release_held(store, meta, entry):
     return (store.load(meta["id"]) or {}).get("print_state") == "sent"
 
 
+def dispatch_log(store, jid, step, ok, text, status=None, **fields):
+    """One line of the automatic dispatch (label, Zebra, tracking, dispatched) on the job: its history and meta['dispatch']."""
+    meta = store.load(jid) or {}
+    d = dict(meta.get("dispatch") or {})
+    steps = list(d.get("steps") or [])
+    steps.append({"at": now_iso(), "step": step, "ok": bool(ok), "text": str(text)[:300]})
+    d["steps"] = steps[-40:]
+    if status:
+        d["status"] = status
+    d.update({k: v for k, v in fields.items() if v is not None})
+    store.note(jid, f"dispatch {step}: {'ok' if ok else 'FAILED'} - {str(text)[:200]}", dispatch=d)
+    return d
+
+
 def hold_job(store, meta, tray, copies, why):
     p = held.hold(store.cfg, meta["id"], tray, copies, why)
     if p is None:
@@ -508,6 +522,11 @@ def make_handler(store: Store, qr: "QRMode"):
                     n = copies_of({"copies": body.get("copies")})
                     store.note(jid, f"copies set to {n}", copies=n)
                     msg = f"{n} {'copy' if n == 1 else 'copies'}"
+                elif action == "dispatch":              # written by the dispatcher (projects/dispatch), nothing else
+                    dispatch_log(store, jid, str(body.get("step", ""))[:40], body.get("ok", True), body.get("text", ""),
+                                 status=body.get("status"), **{k: v for k, v in (body.get("fields") or {}).items()
+                                                               if k in ("order_id", "tracking", "release_at", "label_id")})
+                    msg = "logged"
                 elif action == "resetprinted":
                     # a non-empty log (even 0 sheets) stops printed_sheets() reading the old history lines
                     store.note(jid, "printed count reset to 0", printed_at="", print_state="", print_msg="",

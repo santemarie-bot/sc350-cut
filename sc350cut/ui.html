@@ -159,6 +159,8 @@ function detail() {
     ${!j.error ? `<div class="preview"><img src="${f}preview.svg?${Date.now()}" alt="Print sheet preview"></div>` : ""}
     <dl>
       <dt>QR code</dt><dd>${esc(j.qr)}</dd>
+      ${j.dispatch ? `<dt>Dispatch</dt><dd><b>${esc((j.dispatch.status || "").replace(/_/g, " "))}</b>${j.dispatch.tracking ? " · " + esc(j.dispatch.tracking) : ""}${j.dispatch.release_at ? " · releases " + esc(j.dispatch.release_at.slice(0, 16).replace("T", " ")) : ""}
+        <div style="font-size:12px;color:var(--mute)">${(j.dispatch.steps || []).slice(-6).map(s => `${s.ok ? "✓" : "✗"} ${esc(s.step)} ${esc(s.text)}`).join("<br>")}</div></dd>` : ""}
       <dt>Printed</dt><dd>${j.printed_sheets || 0} of ${j.copies || 1} sheets${(j.print_log || []).length ? " (" + j.print_log.map(p => (p.copies || 1) + (p.reprint ? " reprint" : "")).join(" + ") + ")" : ""}</dd>
       <dt>Customer</dt><dd><input id="cust" value="${esc(j.customer)}" placeholder="optional" style="font:inherit;width:100%"></dd>
       <dt>Artwork</dt><dd>${j.size_mm ? j.size_mm.join(" × ") + " mm" : "-"}</dd>
