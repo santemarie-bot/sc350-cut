@@ -262,7 +262,7 @@ class Store:
                 # keep those in the print, there is nothing to hide
                 pdf, hidden = marks.artwork_as_pdf(art, folder, None if note else cf)
                 meta["cut_lines_hidden"] = hidden
-                ox, oy, sw, sh = marks.build_print_sheet(cfg, jid, pdf, folder / "print.pdf")
+                ox, oy, sw, sh = marks.build_print_sheet(cfg, jid, pdf, folder / "print.pdf", meta.get("customer", ""))
                 meta["sheet_mm"] = [round(sw, 2), round(sh, 2)]
                 sheet = (sw, sh)
                 sheet_paths = [[(x + ox, y + oy) for x, y in p] for p in paths]
@@ -287,8 +287,17 @@ class Store:
         except (geometry.ArtworkError, OSError, ValueError) as e:
             meta["error"] = str(e)
             self.log(f"{jid}: {e}")
-        self.save(meta)
-        return meta
+        # only write what prepare() made: the customer / name / prints may have been changed through the API while
+        # the sheet was being built (Worker Zero sets the customer right after the file lands in the hot folder)
+        mine = ("error", "note", "layout", "qr", "size_mm", "cut_paths", "cut_length_mm", "printable", "cut_lines_hidden",
+                "sheet_mm", "offset_mm")
+        with self.lock:
+            fresh = self.load(jid) or meta
+            fresh.update({k: meta[k] for k in mine if k in meta})
+            self.save(fresh)
+        if fresh.get("customer", "") != meta.get("customer", "") and fresh.get("printable") and not fresh.get("error"):
+            return self.prepare(jid)                      # customer changed meanwhile: its name goes on the sheet
+        return fresh
 
     def preview_svg(self, meta, sheet_paths, print_pdf=None):
         cfg = self.cfg

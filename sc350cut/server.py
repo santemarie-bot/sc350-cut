@@ -1,6 +1,7 @@
 """Web page + background workers (hot folder watcher, 24 h archiver)."""
 import json
 import mimetypes
+import re
 import subprocess
 import threading
 import time
@@ -36,8 +37,47 @@ def worker(store: Store):
 TRAYS = {"5": "manual", "1": "tray-1", "2": "tray-2", "3": "tray-3", "4": "tray-4"}
 
 
-def print_job(store, meta, tray=None):
+MAX_COPIES = 100
+_COPIES_NAME = re.compile(r"_x(\d{1,3})-copies\b", re.I)
+_COPIES_NOTE = re.compile(r"=\s*(\d{1,3})\s*cop(?:y|ies)\b", re.I)
+
+
+def job_copies(meta):
+    """How many copies Print sends: job.json "copies", else "_x<N>-copies" in the file name (Worker Zero round stickers),
+    else "= N copies" in the customer field; 1 otherwise. Capped at MAX_COPIES."""
+    n = meta.get("copies")
+    if not isinstance(n, int) or n < 1:
+        m = _COPIES_NAME.search(meta.get("name") or "") or _COPIES_NOTE.search(meta.get("customer") or "")
+        n = int(m.group(1)) if m else 1
+    return max(1, min(int(n), MAX_COPIES))
+
+
+_PRINTED_NOTE = re.compile(r"^sent to printer.*?(?:(\d+) cop(?:y|ies))?$")
+
+
+def printed_sheets(meta):
+    """Sheets printed so far: the print log, or (jobs printed before the log existed) the history lines."""
+    if meta.get("print_log"):
+        return sum(int(p.get("copies") or 1) for p in meta["print_log"])
+    n = 0
+    for _, text in meta.get("history") or []:
+        m = _PRINTED_NOTE.match(text or "")
+        if m:
+            n += int(m.group(1) or 1)
+    return n
+
+
+def print_job(store, meta, tray=None, copies=None):
+    """copies: what the UI's Copies box says (e.g. 1 for a reprint); default = the order's copies (job_copies).
+    The file name and the order's copies are never changed."""
     cfg = store.cfg
+    order = job_copies(meta)
+    try:
+        copies = int(copies) if copies not in (None, "") else order
+    except (TypeError, ValueError):
+        raise RuntimeError("copies must be a whole number")
+    if not 1 <= copies <= MAX_COPIES:
+        raise RuntimeError(f"copies must be 1-{MAX_COPIES}")
     if not meta.get("printable"):
         raise RuntimeError("this job has no print sheet")
     opts = []
@@ -47,15 +87,23 @@ def print_job(store, meta, tray=None):
         opts += ["-o", o]
     if tray in TRAYS and not any(o.startswith("media=") for o in opts):
         opts += ["-o", "media=" + TRAYS[tray]]
-    cmd = ["lp"] + (["-d", cfg.printer] if cfg.printer else []) + opts + \
+    cmd = ["lp"] + (["-d", cfg.printer] if cfg.printer else []) + opts + ["-n", str(copies)] + \
         ["-t", meta["id"], str(Path(meta["folder"]) / "print.pdf")]
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     if r.returncode:
         raise RuntimeError(r.stderr.strip() or "lp failed")
     where = f"tray {tray}" if tray in TRAYS else "default tray"
-    store.note(meta["id"], f"sent to printer {cfg.printer or '(default)'}, {where}", prints=meta.get("prints", 0) + 1,
-               printed_at=now_iso())
-    return r.stdout.strip()
+    before = printed_sheets(meta)
+    log = list(meta.get("print_log") or [])
+    if not log and before:                                   # keep earlier prints (from the history) in the count
+        log.append({"at": meta.get("printed_at") or "", "copies": before, "note": "printed before the print log existed"})
+    log.append({"at": now_iso(), "copies": copies, "tray": tray or "", "printer": cfg.printer or "(default)",
+                "reprint": bool(before)})
+    total = before + copies
+    store.note(meta["id"], f"sent to printer {cfg.printer or '(default)'}, {where}, {copies} cop{'y' if copies == 1 else 'ies'}"
+               + (f" (reprint; printed {total} of {order})" if before else f" (printed {total} of {order})"),
+               prints=meta.get("prints", 0) + 1, printed_at=now_iso(), print_log=log)
+    return f"printing {copies} cop{'y' if copies == 1 else 'ies'}; printed {total} of {order}"
 
 
 def cut_job(store, meta):
@@ -242,6 +290,8 @@ def make_handler(store: Store, qr: "QRMode"):
                 for j in jobs:
                     j.pop("folder", None)
                     j["qr"] = store.qr_text(j["id"])
+                    j["copies"] = job_copies(j)
+                    j["printed_sheets"] = printed_sheets(j)
                 media = next((o[6:] for o in store.cfg.print_options.split() if o.startswith("media=")), "")
                 default_tray = next((k for k, v in TRAYS.items() if v == media), "")
                 return self._send(200, {"jobs": jobs, "queue_hours": store.cfg.queue_hours, "tray": default_tray,
@@ -317,7 +367,7 @@ def make_handler(store: Store, qr: "QRMode"):
                     return self._send(409, {"confirm": f"{jid} was already {'printed' if action == 'print' else 'cut'} "
                                                        f"at {meta[again][11:16]} on {meta[again][:10]}. Do it again?"})
                 if action == "print":
-                    msg = print_job(store, meta, str(body.get("tray") or "") or None)
+                    msg = print_job(store, meta, str(body.get("tray") or "") or None, body.get("copies"))
                 elif action == "cut":
                     msg = cut_job(store, meta)
                 elif action == "mark":
@@ -334,8 +384,17 @@ def make_handler(store: Store, qr: "QRMode"):
                 elif action == "delete":
                     store.delete(jid); msg = "deleted"
                 elif action == "customer":
-                    store.note(jid, "customer set", customer=str(body.get("customer", ""))[:200])
+                    cust = str(body.get("customer", ""))[:200]
+                    store.note(jid, f"customer set: {cust}" if cust else "customer cleared", customer=cust)
+                    if meta.get("printable") and not meta.get("error"):
+                        store.prepare(jid)                # the customer is printed next to the QR: remake the sheet
                     msg = "saved"
+                elif action == "rename":
+                    name = Path(str(body.get("name", ""))).name.strip()
+                    if not name or name.startswith(".") or len(name) > 200:
+                        return self._send(400, {"error": "bad file name"})
+                    store.note(jid, f"renamed from {meta['name']}", name=name)
+                    msg = "renamed"
                 else:
                     return self._send(404, {"error": "unknown action"})
                 return self._send(200, {"ok": True, "message": msg})
