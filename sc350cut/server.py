@@ -71,9 +71,9 @@ def watch_prints(store, every=5):
             log(f"{m['id']}: CUPS job {m['cups_job']} {msg}")
         else:
             if not printer.check(store.cfg.printer, max_age=0)[0]:
-                # the Xerox stopped answering while CUPS still says printing (seen twice on 2026-11-14, both times during an A3 job)
-                msg = ("the Xerox stopped answering while printing: check the output tray. CUPS reports 'completed' when it is back; "
-                       "the Xerox page counter then decides whether it printed")
+                # the Xerox is off (the owner switches it off when idle) while CUPS still says printing: normal, no escalation
+                msg = ("the Xerox is switched off or not answering; CUPS finishes the job when it is back and the Xerox page "
+                       "counter then decides whether it printed")
             if msg != m.get("print_msg"):
                 store.note(m["id"], f"CUPS job {m['cups_job']} {msg}", print_msg=msg)
 
@@ -532,6 +532,18 @@ def make_handler(store: Store, qr: "QRMode"):
                                  status=body.get("status"), **{k: v for k, v in (body.get("fields") or {}).items()
                                                                if k in ("order_id", "tracking", "release_at", "label_id")})
                     msg = "logged"
+                elif action == "markprinted":            # the owner has the sheet(s): record them as printed (no CUPS/counter needed)
+                    try:
+                        n = int(body.get("copies") or 1)
+                    except (TypeError, ValueError):
+                        raise RuntimeError("copies must be a whole number")
+                    if not 1 <= n <= MAX_COPIES:
+                        raise RuntimeError(f"copies must be 1-{MAX_COPIES}")
+                    plog = [p for p in meta.get("print_log") or [] if not p.get("failed") and int(p.get("copies") or 0)]
+                    plog.append({"at": now_iso(), "copies": n, "note": "confirmed by the owner (sheet in hand)", "confirmed_by": "owner"})
+                    store.note(jid, f"marked printed by the owner: {n} sheet{'s' if n != 1 else ''} in hand", print_log=plog,
+                               printed_at=now_iso(), print_state="done", print_msg="", print_confirmed_by="owner", cups_done_at=0)
+                    msg = f"marked printed: {n}"
                 elif action == "resetprinted":
                     # a non-empty log (even 0 sheets) stops printed_sheets() reading the old history lines
                     store.note(jid, "printed count reset to 0", printed_at="", print_state="", print_msg="",
