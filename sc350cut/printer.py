@@ -41,3 +41,23 @@ def check(queue, timeout=2.0, max_age=5.0):
             val = (False, u.hostname, f"Xerox offline: {u.hostname} is not answering ({e.strerror or e})")
     _cache.update(at=now, key=queue, val=val)
     return val
+
+
+def counters(queue, timeout=4.0):
+    """The Xerox's own usage counters (its web page /prcnt.htm), e.g. {"total": 588646, "color": 465927, "large": 37024},
+    or None if the page can't be read. CUPS 'completed' can be wrong (a printer that rebooted mid-job); the total
+    impression counter only moves when the printer really printed."""
+    import urllib.request
+    online, host, _ = check(queue, max_age=5)
+    if not (online and host):
+        return None
+    try:
+        t = urllib.request.urlopen("http://%s/prcnt.htm" % host, timeout=timeout).read().decode("latin1")
+        pick = lambda name: re.search(r"'%s',(\d+)" % name, t)
+        tot = pick("Total Impressions")
+        if not tot:
+            return None
+        return {"total": int(tot.group(1)), "color": int((pick("Color Printed Impressions") or tot).group(1)),
+                "large": int((pick("Large Impressions") or tot).group(1))}
+    except Exception:
+        return None

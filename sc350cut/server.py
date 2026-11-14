@@ -50,8 +50,20 @@ def watch_prints(store, every=5):
         if st is None:
             continue  # CUPS not answering; ask again next time
         if st in cupsjob.DONE_OK:
+            before, now = m.get("counters_before"), printer.counters(store.cfg.printer)
+            if before and now and now["total"] <= before["total"]:
+                # CUPS says completed but the Xerox counted no impression: give the counter 60 s to catch up
+                seen = m.get("cups_done_at") or 0
+                if not seen:
+                    store.note(m["id"], f"CUPS says job {m['cups_job']} completed; waiting for the Xerox counter", cups_done_at=time.time())
+                elif time.time() - seen > 60:
+                    store.note(m["id"], f"CUPS job {m['cups_job']} completed but the Xerox counted no impression: unconfirmed",
+                               print_state="unconfirmed", print_msg="CUPS says completed but the Xerox counted no page. Check the "
+                               "output tray; print again if nothing came out, or tick Printed by hand.")
+                    log(f"{m['id']}: CUPS job {m['cups_job']} completed, Xerox counter unchanged")
+                continue
             store.note(m["id"], f"printer finished CUPS job {m['cups_job']}",
-                       print_state="done", print_msg="", printed_at=now_iso(), sheets_cut=0, cut_at="")
+                       print_state="done", print_msg="", printed_at=now_iso(), sheets_cut=0, cut_at="", cups_done_at=0)
             log(f"{m['id']}: CUPS job {m['cups_job']} completed")
         elif st in cupsjob.DONE_BAD:
             plog = [dict(p, failed=True) if p.get("cups_job") == m["cups_job"] else p for p in m.get("print_log") or []]
@@ -126,6 +138,7 @@ def print_job(store, meta, tray=None, copies=None):
         opts += ["-o", "media=" + TRAYS[tray]]
     cmd = ["lp"] + (["-d", cfg.printer] if cfg.printer else []) + opts + ["-n", str(copies)] + \
         ["-t", meta["id"], str(Path(meta["folder"]) / "print.pdf")]
+    cbefore = printer.counters(cfg.printer)                  # the Xerox's own impression count, to confirm it really printed
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     if r.returncode:
         raise RuntimeError(r.stderr.strip() or "lp failed")
@@ -146,7 +159,8 @@ def print_job(store, meta, tray=None, copies=None):
         return f"printing {copies} cop{'y' if copies == 1 else 'ies'}; printed {total} of {order}"
     # lp only means CUPS queued it: printed is ticked when CUPS says the job completed
     store.note(meta["id"], f"{sent}, CUPS job {jobno}", prints=meta.get("prints", 0) + 1, printed_at="", print_log=log,
-               sheets_cut=0, cut_at="", cups_job=jobno, print_state="sent", print_msg="waiting for the printer")
+               sheets_cut=0, cut_at="", cups_job=jobno, print_state="sent", print_msg="waiting for the printer",
+               counters_before=cbefore, cups_done_at=0)
     return f"CUPS job {jobno}: {copies} cop{'y' if copies == 1 else 'ies'} queued (ticked printed once the Xerox has printed it)"
 
 
